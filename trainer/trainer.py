@@ -1,8 +1,11 @@
 import os
 import math
 import torch
+import random
+import numpy as np
 
 from diffusers.optimization import get_scheduler
+from diffusers.utils.torch_utils import is_compiled_module
 
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -11,6 +14,8 @@ from torch.utils.data import DataLoader
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs, ProjectConfiguration
 
+from typing import Any
+from datetime import datetime
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
 from loguru import logger
@@ -28,11 +33,17 @@ class Trainer:
         batch_size_per_process: int,
         optimizer_lr: float,
         training_steps_per_process: int,
-        log_steps_per_process: int,
+        save_steps_per_process: int,
         eval_steps_per_process: int,
         pipeline_configs: OmegaConf,
         optimizer_configs: OmegaConf,
         train_data_configs: OmegaConf,
+        output_dir: str = "outputs",
+        project_name: str = "outputs/project-train",
+        backup_dir: str | None = None,
+        checkpoint_dir: str = "outputs/checkpoints",
+        evaluation_dir: str = "outputs/evaluations",
+        log_dir: str = "logs",
         random_seed: int = 0,
         num_epochs: int | None = None,
         num_warmup_steps_per_process: int | None = None,
@@ -48,11 +59,18 @@ class Trainer:
         self.adapter_configs = adapter_configs
         self.lr_scheduler_configs = lr_scheduler_configs
 
+        self.output_dir = output_dir
+        self.backup_dir = backup_dir
+        self.project_name = project_name
+        self.checkpoint_dir = checkpoint_dir
+        self.evaluation_dir = evaluation_dir
+        self.log_dir = log_dir
+
         self.data_loader_workers = data_loader_workers
         self.batch_size_per_process = batch_size_per_process
         self.optimizer_lr = optimizer_lr
         self.training_steps_per_process = training_steps_per_process
-        self.log_steps_per_process = log_steps_per_process
+        self.save_steps_per_process = save_steps_per_process
         self.eval_steps_per_process = eval_steps_per_process
         self.num_warmup_steps_per_process = num_warmup_steps_per_process
         self.random_seed = random_seed
@@ -68,6 +86,16 @@ class Trainer:
 
         self._train_dtype = None
         self._eval_dtype = torch.float32
+
+    def _init_project(self, accelerator: Accelerator):
+        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        os.makedirs(self.evaluation_dir, exist_ok=True)
+        os.makedirs(self.log_dir, exist_ok=True)
+
+        # TODO: Add project backup is required.
+        if self.backup_dir is not None:
+            os.makedirs(self.backup_dir, exist_ok=True)
 
     def _init_pipeline(self, accelerator: Accelerator):
         if self._train_dtype is None:
@@ -96,6 +124,7 @@ class Trainer:
         )
 
     def _init_data_loader(self, accelerator: Accelerator):
+        # TODO: Maybe initialize worker_init_fn to make sure the random seeds differ between workers
         trainset: SchemaDataset = instantiate(self.train_data_configs)
         self.train_loader = DataLoader(
             dataset=trainset,
@@ -108,6 +137,18 @@ class Trainer:
             self.eval_loader = DataLoader(dataset=evalset, batch_size=1, num_workers=self.data_loader_workers)
 
     def init_everything(self, accelerator: Accelerator):
+        rank = accelerator.process_index
+        seed = self.random_seed + rank
+
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
         for handler in self.initialization_handlers:
             handler(accelerator)
 
@@ -140,14 +181,24 @@ class Trainer:
             )
             self.lr_scheduler = accelerator.prepare(self.lr_scheduler)
 
-    def save_checkpoints(self):
+    def unwrap_model(accelerator: Accelerator, model: torch.nn.Module):
+        model = accelerator.unwrap_model(model)
+        model = model._orig_mod if is_compiled_module(model) else model
+        return model
+
+    def save_checkpoints(self, global_step: int):
         pass
 
     @torch.no_grad()
-    def eval_step(self):
+    def eval_step(self, data_loader: DataLoader, context: dict[str, Any] | None = None):
         pass
 
-    def forwrad_step(self):
+    def forwrad_step(
+        self,
+        accelerator: Accelerator,
+        batch: dict[str, str | torch.Tensor],
+        context: dict[str, Any] | None = None,
+    ) -> torch.Tensor:
         pass
 
     def train(self, accelerator: Accelerator):
@@ -170,7 +221,7 @@ class Trainer:
         info = (
             f"\n{log_title}"
             f"\n  World size               : {world_size}"
-            f"\n  Random seed              : {self.random_seed}"
+            f"\n  Random seed              : {self.random_seed} (Differ between ranks)"
             f"\n  Mixed precision          : {accelerator.mixed_precision}"
             f"\n  Num training batches     : {len(self.train_loader)}"
             f"\n  Batch size per device    : {self.batch_size_per_process}"
@@ -184,26 +235,66 @@ class Trainer:
         logger.info(info)
 
         global_step = 0
+        context = {"device": device, "train_dtype": self._train_dtype, "eval_dtype": self._eval_dtype}
+        metrics = {"loss": 0}
+        align_w1 = len(f"{self.num_epochs}")
+        align_w2 = len(f"{self.training_steps_per_process}")
         for epoch in range(self.num_epochs):
             for batch in self.train_loader:
                 with accelerator.accumulate(*modules_to_accum):
-                    with torch.no_grad():
-                        pass
                     with accelerator.autocast():
-                        pass
+                        loss: torch.Tensor = self.forwrad_step(accelerator, batch, context)
+                    accelerator.backward(loss)
 
                     if accelerator.sync_gradients:
-                        torch.nn.utils.clip_grad_norm_(self.pipeline.trainable_parameters, self.max_grad_norm)
+                        accelerator.clip_grad_norm_(self.pipeline.trainable_parameters, self.max_grad_norm)
                     self.optimizer.step()
                     if self.lr_scheduler is not None:
                         self.lr_scheduler.step()
                     self.optimizer.zero_grad()
 
+                    metrics["loss"] += loss.item()
+
                 if accelerator.sync_gradients:
                     global_step += 1
 
+                    metrics["loss"] = metrics["loss"] / accelerator.gradient_accumulation_steps
 
+                    if (
+                        is_main_process
+                        and (global_step == 1)
+                        or (global_step == self.training_steps_per_process)
+                        or (global_step % self.save_steps_per_process == 0)
+                    ):
+                        self.save_checkpoints(global_step)
 
-    @torch.no_grad()
+                    if (
+                        is_main_process
+                        and self.eval_loader is not None
+                        and (global_step == 1)
+                        or (global_step == self.training_steps_per_process)
+                        or (global_step % self.eval_steps_per_process == 0)
+                    ):
+                        self.eval_step(self.eval_loader, context)
+
+                    loginfo = (
+                        f"[Epoch {epoch+1:{align_w1}d}/{self.num_epochs} | "
+                        + f"Step {global_step:{align_w2}d}/{self.training_steps_per_process}] "
+                        + f"Loss {metrics['loss']:.6f}"
+                    )
+                    logger.info(loginfo)
+
+                if global_step > self.training_steps_per_process:
+                    break
+            if global_step > self.training_steps_per_process:
+                break
+        logger.info(f"End training, waiting for everyone.")
+        accelerator.wait_for_everyone()
+        if is_main_process and self.eval_loader is not None:
+            self.eval_step(self.eval_loader, context)
+        accelerator.end_training()
+
+    @torch.inference_mode()
     def generate(self):
+        r"""Inference pipeline"""
         pass
