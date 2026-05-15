@@ -1,0 +1,29 @@
+_target_: trainer.MaskFlowLoRATrainer
+_recursive_: false
+
+pipeline_configs: ${pipeline}
+optimizer_configs: ${optimizer}
+train_data_configs: ${trainset}
+eval_data_configs: ${evalset}
+adapter_configs: ${adapter}
+lr_scheduler_configs: null
+
+data_loader_workers: 8
+batch_size_per_process: 1
+
+output_dir: ${project.output_dir}
+project_name: ${project.project_name}
+backup_dir: ${project.backup_dir}
+checkpoint_dir: ${project.checkpoint_dir}
+evaluation_dir: ${project.evaluation_dir}
+log_dir: ${project.log_dir}
+
+training_steps_per_process: 1000
+save_steps_per_process: 100
+eval_steps_per_process: 100
+random_seed: 0
+num_epochs: null
+num_warmup_steps_per_process: null
+max_grad_norm: 1.0
+cudnn_deterministic: false
+cudnn_benchmark: true
