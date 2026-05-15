@@ -1,0 +1,5 @@
+_target_: data_module.dataset.SchemaDataset
+
+
+data_file: ""
+data_load_ratio: 1.0

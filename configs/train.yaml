@@ -1,0 +1,23 @@
+defaults:
+  - trainset: mask_edit_single
+  - evalset: mask_edit_single
+  - optimizer: prodigy
+  - pipeline: qwenimage_edit_plus_2511
+  - project: train
+  - adapter: lora
+  - lr_scheduler: null
+  - trainer: mask_flow
+  - _self_
+
+
+# Accelerate
+gradient_accumulation_steps: 1
+log_with: tensorboard
+output_dir: ${project.output_dir}
+log_dir: ${project.log_dir}
+enable_find_unused_parameters: true
+
+
+hydra:
+  run:
+    dir: ${project.output_dir}/hydra-configs
