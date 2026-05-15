@@ -16,6 +16,7 @@ class SchemaDataset(Dataset):
 
     def __init__(
         self,
+        image_root: str,
         data_file: str,
         data_load_ratio: float = 1.0,
         enable_aspect_bucket: bool = False,
@@ -25,12 +26,14 @@ class SchemaDataset(Dataset):
             data_file (str): JSON or JSONL file.
         """
         super().__init__()
+        self.image_root = image_root
         self.data_file = data_file
         self.is_bucketed = is_bucketed_dataset(self.data_file)
 
         # TODO: Add aspect ratio bucket
         if self.is_bucketed:
             logger.error(f"Current dataset not support aspect ratio buckets.")
+            raise NotImplementedError(f"Current dataset not support aspect ratio buckets.")
 
         self.samples = self._load_data_file(load_ratio=data_load_ratio)
         self.num_samples = len(self.samples)
@@ -39,10 +42,12 @@ class SchemaDataset(Dataset):
         if not os.path.exists(self.data_file):
             raise FileExistsError(f"{self.data_file} is not exists.")
 
+        samples = []
         with open(self.data_file, "r") as f:
-            samples: list[dict[str, Any]] = json.load(f)
+            for l in f:
+                samples.append(json.loads(l))
 
-        return samples[:load_ratio]
+        return samples[: min(len(samples), int(len(samples) * load_ratio))]
 
     def _load_image_tensor(self, path: str) -> torch.Tensor:
         return T.to_tensor(Image.open(path).convert("RGB"))
@@ -56,8 +61,8 @@ class SchemaDataset(Dataset):
         conditions = sample["conditions"]
         target = sample["target"]
 
-        conditions = [self._load_image_tensor(c) for c in conditions]
-        target = self._load_image_tensor(target)
+        conditions = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
+        target = self._load_image_tensor(os.path.join(self.image_root, target))
 
         return {
             "prompt": self._preprocess_prompt(prompt),
