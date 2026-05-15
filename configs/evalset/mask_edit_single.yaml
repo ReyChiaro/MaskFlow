@@ -7,4 +7,4 @@ max_resolution: 1048576
 divisible_by: 16
 enable_aspect_bucket: false
 enable_prompt_truncation: true
-replace_prompt_placeholder_with: "the area masked by image 2."
+replace_prompt_placeholder_with: "the area masked by image 2"

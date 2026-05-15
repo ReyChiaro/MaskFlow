@@ -17,5 +17,9 @@ wandb/
 outputs/
 
 # Others
+.env
 tools/
 scripts/
+_test*.py
+*.jsonl
+*.json
