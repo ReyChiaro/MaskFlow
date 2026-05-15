@@ -1,6 +1,6 @@
 _target_: data_module.MaskEditDataset
 
-image_root: "/data/nvme7/intern-xr/datasets/MaskImageEdit-S"
+image_root: "MaskImageEdit-S"
 data_file: "outputs/data_cache/demo.jsonl"
 data_load_ratio: 1
 max_resolution: 1048576
