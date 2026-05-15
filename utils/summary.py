@@ -37,8 +37,10 @@ def summarize_model(model: nn.Module) -> dict[str, int | float]:
 def get_summary_table(summary_dict) -> str:
     if not summary_dict:
         return
-    if not isinstance(next(iter(summary_dict)), dict):
+    if not isinstance(summary_dict[next(iter(summary_dict))], dict):
         summary_dict = {"<Model Name>": summary_dict}
+    
+    print(summary_dict)
 
     first_model = list(summary_dict.keys())[0]
     columns = list(summary_dict[first_model].keys())
@@ -63,6 +65,9 @@ def get_summary_table(summary_dict) -> str:
         row_str = f"{name:<{name_width}}"
         for col in columns:
             val = info[col]
+            print(val)
+            print(col)
+            print(col_widths)
             row_str += f" | {val:>{col_widths[col]}}"
         table += "\n" + row_str
     table += "\n" + "=" * len(header_str)

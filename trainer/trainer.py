@@ -31,7 +31,6 @@ class Trainer:
         self,
         data_loader_workers: int,
         batch_size_per_process: int,
-        optimizer_lr: float,
         training_steps_per_process: int,
         save_steps_per_process: int,
         eval_steps_per_process: int,
@@ -48,9 +47,12 @@ class Trainer:
         num_epochs: int | None = None,
         num_warmup_steps_per_process: int | None = None,
         max_grad_norm: float = 1.0,
+        enable_gradient_checkpoint: bool = True,
         eval_data_configs: OmegaConf | None = None,
         adapter_configs: OmegaConf | None = None,
         lr_scheduler_configs: OmegaConf | None = None,
+        cudnn_deterministic: bool = False,
+        cudnn_benchmark: bool = True,
     ):
         self.pipeline_configs = pipeline_configs
         self.optimizer_configs = optimizer_configs
@@ -68,7 +70,6 @@ class Trainer:
 
         self.data_loader_workers = data_loader_workers
         self.batch_size_per_process = batch_size_per_process
-        self.optimizer_lr = optimizer_lr
         self.training_steps_per_process = training_steps_per_process
         self.save_steps_per_process = save_steps_per_process
         self.eval_steps_per_process = eval_steps_per_process
@@ -76,8 +77,14 @@ class Trainer:
         self.random_seed = random_seed
         self.num_epochs = num_epochs
         self.max_grad_norm = max_grad_norm
+        self.enable_gradient_checkpoint = enable_gradient_checkpoint
+
+        self.cudnn_benchmark = cudnn_benchmark
+        self.cudnn_deterministic = cudnn_deterministic
 
         self.initialization_handlers = [
+            self._init_context,
+            self._init_project,
             self._init_pipeline,
             self._init_adapter,
             self._init_optimizer,
@@ -86,6 +93,22 @@ class Trainer:
 
         self._train_dtype = None
         self._eval_dtype = torch.float32
+
+    def _init_context(self, accelerator: Accelerator):
+        if self._train_dtype is None:
+            self._train_dtype = torch.float32
+            if accelerator.mixed_precision == "bf16":
+                self._train_dtype = torch.bfloat16
+            elif accelerator.mixed_precision == "fp16":
+                self._train_dtype = torch.float16
+
+        self.rank = accelerator.process_index
+        self.random_seed = self.random_seed + self.rank
+        self.world_size = accelerator.num_processes
+        self.device = torch.device(f"cuda:{self.rank}")
+        self.generator = torch.Generator(self.device).manual_seed(self.random_seed)
+        self.is_main_process = accelerator.is_main_process
+        logger.info(f"Context initialized.")
 
     def _init_project(self, accelerator: Accelerator):
         os.makedirs(self.output_dir, exist_ok=True)
@@ -96,21 +119,16 @@ class Trainer:
         # TODO: Add project backup is required.
         if self.backup_dir is not None:
             os.makedirs(self.backup_dir, exist_ok=True)
+        logger.info(f"Project initialized.")
 
     def _init_pipeline(self, accelerator: Accelerator):
-        if self._train_dtype is None:
-            self._train_dtype = torch.float32
-            if accelerator.mixed_precision == "bf16":
-                self._train_dtype = torch.bfloat16
-            elif accelerator.mixed_precision == "fp16":
-                self._train_dtype = torch.float16
-
         self.pipeline: DiTPipelineManager = instantiate(self.pipeline_configs)
         self.pipeline.init_components(
             self.pipeline.pretrained_model_name_or_path,
             torch_dtype=self._train_dtype,
             device=accelerator.device,
         )
+        logger.info(f"Pipeline initialized.")
 
     def _init_adapter(self, accelerator: Accelerator):
         r"""Add adapter (e.g. LoRA, Control Net) to the loaded pipeline."""
@@ -119,9 +137,9 @@ class Trainer:
     def _init_optimizer(self, accelerator: Accelerator):
         self.optimizer: Optimizer = instantiate(
             self.optimizer_configs,
-            lr=self.optimizer_lr,
             params=[p for p in self.pipeline.trainable_parameters.values()],
         )
+        logger.info(f"Optimizer initialized.")
 
     def _init_data_loader(self, accelerator: Accelerator):
         # TODO: Maybe initialize worker_init_fn to make sure the random seeds differ between workers
@@ -131,33 +149,39 @@ class Trainer:
             batch_size=self.batch_size_per_process,
             num_workers=self.data_loader_workers,
         )
+        logger.info(f"Train Dataloader initialized.")
         self.eval_loader = None
         if self.eval_data_configs is not None:
             evalset: SchemaDataset = instantiate(self.eval_data_configs)
             self.eval_loader = DataLoader(dataset=evalset, batch_size=1, num_workers=self.data_loader_workers)
+            logger.info(f"Eval Dataloader initialized.")
 
     def init_everything(self, accelerator: Accelerator):
-        rank = accelerator.process_index
-        seed = self.random_seed + rank
-
+        # The seed has been rank-shifted
+        seed = self.random_seed
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = self.cudnn_deterministic
+        torch.backends.cudnn.benchmark = self.cudnn_benchmark
 
         for handler in self.initialization_handlers:
             handler(accelerator)
 
         modules_to_prepare = [getattr(self.pipeline, m) for m in self.pipeline.trainable_modules]
         obj_to_prepare = [*modules_to_prepare, self.optimizer, self.train_loader]
-        prepared = accelerator(*obj_to_prepare)
+        prepared = accelerator.prepare(*obj_to_prepare)
 
         for i, module_name in enumerate(self.pipeline.trainable_modules):
             setattr(self.pipeline, module_name, prepared[i])
+
+        if self.enable_gradient_checkpoint:
+            for m in self.pipeline.components:
+                if hasattr(getattr(self.pipeline, m), "enable_gradient_checkpoint"):
+                    getattr(self.pipeline, m).enable_gradient_checkpoint()
         self.train_loader = prepared[-1]
         self.optimizer = prepared[-2]
 
@@ -168,7 +192,7 @@ class Trainer:
         if self.num_epochs is None:
             self.num_epochs = math.ceil(self.training_steps_per_process / self.num_update_per_epoch)
 
-        if getattr(self, "lr_scheduler_configs", None) is not None:
+        if getattr(self, "lr_scheduler", None) is not None:
             self.lr_scheduler = get_scheduler(
                 name=self.lr_scheduler.name,
                 optimizer=self.optimizer,
@@ -189,6 +213,9 @@ class Trainer:
     def save_checkpoints(self, global_step: int):
         pass
 
+    def load_checkpoints(self, module_name: str, checkpoint_path: str):
+        pass
+
     @torch.no_grad()
     def eval_step(self, data_loader: DataLoader, context: dict[str, Any] | None = None):
         pass
@@ -204,14 +231,7 @@ class Trainer:
     def train(self, accelerator: Accelerator):
         self.init_everything(accelerator)
 
-        rank = accelerator.process_index
-        world_size = accelerator.num_processes
-        device = torch.device(f"cuda:{rank}")
-        generator = torch.Generator(device).manual_seed(self.random_seed)
-        is_main_process = accelerator.is_main_process
-
         modules_to_accum = [getattr(self.pipeline, m) for m in self.pipeline.trainable_modules]
-
         pipe_summary = self.pipeline.summary
         summary_table = get_summary_table(pipe_summary)
         logger.info(summary_table)
@@ -220,7 +240,7 @@ class Trainer:
         log_title = f"{sep} Start Training {sep}"
         info = (
             f"\n{log_title}"
-            f"\n  World size               : {world_size}"
+            f"\n  World size               : {self.world_size}"
             f"\n  Random seed              : {self.random_seed} (Differ between ranks)"
             f"\n  Mixed precision          : {accelerator.mixed_precision}"
             f"\n  Num training batches     : {len(self.train_loader)}"
@@ -235,7 +255,12 @@ class Trainer:
         logger.info(info)
 
         global_step = 0
-        context = {"device": device, "train_dtype": self._train_dtype, "eval_dtype": self._eval_dtype}
+        context = {
+            "device": self.device,
+            "train_dtype": self._train_dtype,
+            "eval_dtype": self._eval_dtype,
+            "generator": self.generator,
+        }
         metrics = {"loss": 0}
         align_w1 = len(f"{self.num_epochs}")
         align_w2 = len(f"{self.training_steps_per_process}")
@@ -261,15 +286,15 @@ class Trainer:
                     metrics["loss"] = metrics["loss"] / accelerator.gradient_accumulation_steps
 
                     if (
-                        is_main_process
+                        self.is_main_process
                         and (global_step == 1)
                         or (global_step == self.training_steps_per_process)
                         or (global_step % self.save_steps_per_process == 0)
                     ):
-                        self.save_checkpoints(global_step)
+                        self.save_checkpoints(accelerator, global_step)
 
                     if (
-                        is_main_process
+                        self.is_main_process
                         and self.eval_loader is not None
                         and (global_step == 1)
                         or (global_step == self.training_steps_per_process)
@@ -290,7 +315,7 @@ class Trainer:
                 break
         logger.info(f"End training, waiting for everyone.")
         accelerator.wait_for_everyone()
-        if is_main_process and self.eval_loader is not None:
+        if self.is_main_process and self.eval_loader is not None:
             self.eval_step(self.eval_loader, context)
         accelerator.end_training()
 
