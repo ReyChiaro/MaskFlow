@@ -1,24 +1,25 @@
 import os
+import copy
 import math
 import torch
 import random
 import numpy as np
+import torch.nn.functional as F
 
 from diffusers.optimization import get_scheduler
 from diffusers.utils.torch_utils import is_compiled_module
 
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
+from torchvision.utils import save_image
 
 from accelerate import Accelerator
-from accelerate.utils import DistributedDataParallelKwargs, ProjectConfiguration
 
 from typing import Any
-from datetime import datetime
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
 from loguru import logger
+from safetensors.torch import save_file, load_file
 
 from data_module.dataset import SchemaDataset
 from pipelines.pipeline_manager import DiTPipelineManager
@@ -47,10 +48,12 @@ class Trainer:
         num_epochs: int | None = None,
         num_warmup_steps_per_process: int | None = None,
         max_grad_norm: float = 1.0,
+        num_inference_steps: int = 50,
         enable_gradient_checkpoint: bool = True,
         eval_data_configs: OmegaConf | None = None,
         adapter_configs: OmegaConf | None = None,
         lr_scheduler_configs: OmegaConf | None = None,
+        enable_async_inference: bool = False,
         cudnn_deterministic: bool = False,
         cudnn_benchmark: bool = True,
     ):
@@ -78,9 +81,13 @@ class Trainer:
         self.num_epochs = num_epochs
         self.max_grad_norm = max_grad_norm
         self.enable_gradient_checkpoint = enable_gradient_checkpoint
+        # TODO
+        self.enable_async_inference = enable_async_inference
 
         self.cudnn_benchmark = cudnn_benchmark
         self.cudnn_deterministic = cudnn_deterministic
+
+        self.num_inference_steps = num_inference_steps
 
         self.initialization_handlers = [
             self._init_context,
@@ -92,7 +99,7 @@ class Trainer:
         ]
 
         self._train_dtype = None
-        self._eval_dtype = torch.float32
+        self._eval_dtype = torch.bfloat16
 
     def _init_context(self, accelerator: Accelerator):
         if self._train_dtype is None:
@@ -101,6 +108,7 @@ class Trainer:
                 self._train_dtype = torch.bfloat16
             elif accelerator.mixed_precision == "fp16":
                 self._train_dtype = torch.float16
+        self._eval_dtype = torch.bfloat16
 
         self.rank = accelerator.process_index
         self.random_seed = self.random_seed + self.rank
@@ -135,10 +143,7 @@ class Trainer:
         pass
 
     def _init_optimizer(self, accelerator: Accelerator):
-        self.optimizer: Optimizer = instantiate(
-            self.optimizer_configs,
-            params=[p for p in self.pipeline.trainable_parameters.values()],
-        )
+        self.optimizer: Optimizer = instantiate(self.optimizer_configs, params=self.pipeline.trainable_parameters)
         logger.info(f"Optimizer initialized.")
 
     def _init_data_loader(self, accelerator: Accelerator):
@@ -171,19 +176,12 @@ class Trainer:
         for handler in self.initialization_handlers:
             handler(accelerator)
 
-        modules_to_prepare = [getattr(self.pipeline, m) for m in self.pipeline.trainable_modules]
-        obj_to_prepare = [*modules_to_prepare, self.optimizer, self.train_loader]
-        prepared = accelerator.prepare(*obj_to_prepare)
-
-        for i, module_name in enumerate(self.pipeline.trainable_modules):
-            setattr(self.pipeline, module_name, prepared[i])
+        self.pipeline.transformer, self.optimizer, self.train_loader = accelerator.prepare(
+            self.pipeline.transformer, self.optimizer, self.train_loader
+        )
 
         if self.enable_gradient_checkpoint:
-            for m in self.pipeline.components:
-                if hasattr(getattr(self.pipeline, m), "enable_gradient_checkpoint"):
-                    getattr(self.pipeline, m).enable_gradient_checkpoint()
-        self.train_loader = prepared[-1]
-        self.optimizer = prepared[-2]
+            self.pipeline.transformer.enable_gradient_checkpointing()
 
         self.total_train_batch_size = (
             self.batch_size_per_process * accelerator.gradient_accumulation_steps * accelerator.num_processes
@@ -194,10 +192,10 @@ class Trainer:
 
         if getattr(self, "lr_scheduler", None) is not None:
             self.lr_scheduler = get_scheduler(
-                name=self.lr_scheduler.name,
+                name=self.lr_scheduler_configs.name,
                 optimizer=self.optimizer,
-                step_rules=self.lr_scheduler.step_rules,
-                num_warmup_steps=self.lr_scheduler.num_warmup_steps * accelerator.num_processes,
+                step_rules=self.lr_scheduler_configs.step_rules,
+                num_warmup_steps=self.lr_scheduler_configs.num_warmup_steps * accelerator.num_processes,
                 num_training_steps=self.training_steps_per_process * accelerator.num_processes,
                 num_cycles=self.lr_scheduler_configs.num_cycles,
                 power=self.lr_scheduler_configs.power,
@@ -205,33 +203,80 @@ class Trainer:
             )
             self.lr_scheduler = accelerator.prepare(self.lr_scheduler)
 
+    @staticmethod
     def unwrap_model(accelerator: Accelerator, model: torch.nn.Module):
         model = accelerator.unwrap_model(model)
         model = model._orig_mod if is_compiled_module(model) else model
         return model
 
-    def save_checkpoints(self, global_step: int):
-        pass
+    def save_checkpoints(self, accelerator: Accelerator, global_step: int):
+        transformer = self.unwrap_model(accelerator, self.pipeline.transformer)
+        states_to_save = {}
+        for n, p in transformer.named_parameters():
+            if p.requires_grad:
+                states_to_save[n] = p
+        save_path = os.path.join(self.checkpoint_dir, f"checkpoints-{global_step}.safetensors")
+        save_file(states_to_save, save_path)
+        logger.info(f"Checkpoints saved to {save_path}.")
 
-    def load_checkpoints(self, module_name: str, checkpoint_path: str):
-        pass
+    def load_checkpoints(self, checkpoint_path: str, **kwargs):
+        states = load_file(checkpoint_path)
+        self.pipeline.transformer.load_state_dict(states)
+        logger.info(f"Load checkpoints from {checkpoint_path}.")
 
-    @torch.no_grad()
-    def eval_step(self, data_loader: DataLoader, context: dict[str, Any] | None = None):
-        pass
+    def save_image(self, output: torch.Tensor, save_path: str, others: list[torch.Tensor] | None = None):
+        processed_tensors = []
+        output = output.squeeze(2)
+        others = [c.squeeze(2) for c in others]
+        if others is not None:
+            for t in others:
+                if t.ndim == 4:
+                    processed_tensors.append(t.squeeze(0))
+                elif t.ndim == 3:
+                    processed_tensors.append(t)
+                else:
+                    raise ValueError(f"Unsupported Tensor dimension: {t.shape}, only 3 or 4 is supported.")
+        processed_tensors.append(output.squeeze(0) if output.ndim == 4 else output)
+        max_height = max(t.shape[1] for t in processed_tensors)
+        padded_tensors = []
+        for t in processed_tensors:
+            # C, H, W = t.shape
+            current_height = t.shape[1]
+            pad_bottom = max_height - current_height
+            if pad_bottom > 0:
+                t_padded = F.pad(t, (0, 0, 0, pad_bottom), mode="constant", value=0)
+                padded_tensors.append(t_padded)
+            else:
+                padded_tensors.append(t)
+        result_tensor = torch.cat(padded_tensors, dim=-1)
+        save_image(result_tensor, save_path)
+        return result_tensor
 
-    def forwrad_step(
-        self,
-        accelerator: Accelerator,
-        batch: dict[str, str | torch.Tensor],
-        context: dict[str, Any] | None = None,
-    ) -> torch.Tensor:
-        pass
+    @torch.inference_mode()
+    def evaluation(self, global_step: int):
+        if self.eval_loader is None:
+            return
+        self.pipeline.transformer.eval()
+        save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
+        os.makedirs(save_dir, exist_ok=True)
+
+        logger.info("\n" + " Start Inference ".center(50, "="))
+        for i, sample in enumerate(self.eval_loader):
+            raw_sample = copy.deepcopy(sample)
+            raw_sample["conditions"] = [c.to(self.device, dtype=self._eval_dtype) for c in raw_sample["conditions"]]
+            raw_sample["target"] = raw_sample["target"].to(self.device, dtype=self._eval_dtype)
+            output = self.pipeline.eval_step(
+                sample, self.num_inference_steps, self.generator, self.device, self._eval_dtype
+            )
+            image_name = raw_sample.get("image_name", f"eval-{i}.jpg")
+            save_path = os.path.join(save_dir, image_name)
+            self.save_image(output, save_path, raw_sample.get("conditions", []) + [raw_sample["target"]])
+        logger.info(f"Inference Ended. Result saved to {save_dir}")
+        self.pipeline.transformer.train()
 
     def train(self, accelerator: Accelerator):
         self.init_everything(accelerator)
 
-        modules_to_accum = [getattr(self.pipeline, m) for m in self.pipeline.trainable_modules]
         pipe_summary = self.pipeline.summary
         summary_table = get_summary_table(pipe_summary)
         logger.info(summary_table)
@@ -255,26 +300,22 @@ class Trainer:
         logger.info(info)
 
         global_step = 0
-        context = {
-            "device": self.device,
-            "train_dtype": self._train_dtype,
-            "eval_dtype": self._eval_dtype,
-            "generator": self.generator,
-        }
         metrics = {"loss": 0}
-        align_w1 = len(f"{self.num_epochs}")
-        align_w2 = len(f"{self.training_steps_per_process}")
+        align = len(f"{self.training_steps_per_process}")
+        self.pipeline.transformer.train()
         for epoch in range(self.num_epochs):
             for batch in self.train_loader:
-                with accelerator.accumulate(*modules_to_accum):
+                with accelerator.accumulate(self.pipeline.transformer):
                     with accelerator.autocast():
-                        loss: torch.Tensor = self.forwrad_step(accelerator, batch, context)
+                        loss: torch.Tensor = self.pipeline.forward_step(
+                            batch, self.generator, self.device, self._train_dtype
+                        )
                     accelerator.backward(loss)
 
                     if accelerator.sync_gradients:
                         accelerator.clip_grad_norm_(self.pipeline.trainable_parameters, self.max_grad_norm)
                     self.optimizer.step()
-                    if self.lr_scheduler is not None:
+                    if getattr(self, "lr_scheduler", None) is not None:
                         self.lr_scheduler.step()
                     self.optimizer.zero_grad()
 
@@ -300,14 +341,16 @@ class Trainer:
                         or (global_step == self.training_steps_per_process)
                         or (global_step % self.eval_steps_per_process == 0)
                     ):
-                        self.eval_step(self.eval_loader, context)
+                        self.evaluation(global_step)
 
                     loginfo = (
-                        f"[Epoch {epoch+1:{align_w1}d}/{self.num_epochs} | "
-                        + f"Step {global_step:{align_w2}d}/{self.training_steps_per_process}] "
+                        f"[Step {global_step:{align}d}/{self.training_steps_per_process}] "
                         + f"Loss {metrics['loss']:.6f}"
                     )
                     logger.info(loginfo)
+
+                    # Reset recorders
+                    metrics["loss"] = 0
 
                 if global_step > self.training_steps_per_process:
                     break
@@ -316,7 +359,7 @@ class Trainer:
         logger.info(f"End training, waiting for everyone.")
         accelerator.wait_for_everyone()
         if self.is_main_process and self.eval_loader is not None:
-            self.eval_step(self.eval_loader, context)
+            self.evaluation(global_step)
         accelerator.end_training()
 
     @torch.inference_mode()

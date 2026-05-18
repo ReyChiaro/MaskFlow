@@ -2,11 +2,11 @@ defaults:
   - trainset: mask_edit_single
   - evalset: mask_edit_single
   - optimizer: prodigy
-  - pipeline: qwenimage_edit_plus_2511
+  - pipeline: qwenimage_mask_flow
   - project: train
   - adapter: lora
   - lr_scheduler: null
-  - trainer: mask_flow
+  - trainer: lora
   - _self_
 
 

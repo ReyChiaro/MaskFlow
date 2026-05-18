@@ -2,7 +2,7 @@ import math
 import torch
 import numpy as np
 
-from typing import Literal
+from typing import Literal, Iterator
 
 
 class RectifiedFlowMatchingScheduler:
@@ -63,6 +63,17 @@ class RectifiedFlowMatchingScheduler:
         sigmas = self.time_shift(t, mu)
         return sigmas
 
+    def inference_delta_sigmas(
+        self, num_inference_steps: int, mu: float | None = None
+    ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        mu = mu if mu is not None else self.shift_mu
+        ts = torch.tensor(list(range(num_inference_steps, -1, -1))) / num_inference_steps
+        sigmas = self.time_shift(ts, mu)
+        print(f"sigmas: {sigmas}")
+        for step in range(num_inference_steps):
+            delta = sigmas[step + 1] - sigmas[step]
+            yield delta, sigmas[step : step + 1]
+
     def calculate_shift_mu(self, img_seq_len: int) -> float:
         scale = (self.max_shift - self.base_shift) / (self.max_image_seq_len - self.base_image_seq_len)
         shift = self.base_shift - scale * self.base_image_seq_len
@@ -70,9 +81,9 @@ class RectifiedFlowMatchingScheduler:
 
     def time_shift(self, t: torch.Tensor, mu: float) -> torch.Tensor:
         if self.time_shift_type == "exponential":
-            sigmas = np.exp(mu) / (np.exp(mu) + (1 / t - 1) ** self.shift_power)
+            sigmas = np.exp(mu) / (np.exp(mu) + (1.0 / t - 1) ** self.shift_power)
         elif self.time_shift_type == "linear":
-            sigmas = mu / (mu + (1 / t - 1) ** self.shift_power)
+            sigmas = mu / (mu + (1.0 / t - 1) ** self.shift_power)
         else:
             sigmas = t
         return sigmas.to(t.device, dtype=t.dtype)

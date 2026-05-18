@@ -1,4 +1,4 @@
-import builtins
+import torch
 import torch.nn as nn
 
 
@@ -39,8 +39,6 @@ def get_summary_table(summary_dict) -> str:
         return
     if not isinstance(summary_dict[next(iter(summary_dict))], dict):
         summary_dict = {"<Model Name>": summary_dict}
-    
-    print(summary_dict)
 
     first_model = list(summary_dict.keys())[0]
     columns = list(summary_dict[first_model].keys())
@@ -65,10 +63,14 @@ def get_summary_table(summary_dict) -> str:
         row_str = f"{name:<{name_width}}"
         for col in columns:
             val = info[col]
-            print(val)
-            print(col)
-            print(col_widths)
             row_str += f" | {val:>{col_widths[col]}}"
         table += "\n" + row_str
     table += "\n" + "=" * len(header_str)
     return table
+
+
+def gpu_utilization():
+    device = torch.cuda.current_device()
+    allocated = torch.cuda.memory_allocated(device) / 1024**2
+    reserved = torch.cuda.memory_reserved(device) / 1024**2
+    return allocated, reserved

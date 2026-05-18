@@ -1,4 +1,3 @@
-import math
 import torch
 import dataclasses
 import torch.nn.functional as F
@@ -11,39 +10,13 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
     CONDITION_IMAGE_SIZE,
 )
 
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
-
+from torchvision.utils import save_image
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from typing import Literal, Any
-from loguru import logger
 
 from schedulers.flow_matching import RectifiedFlowMatchingScheduler
 from pipelines.pipeline_manager import DiTPipelineManager, DenoiserInputs
-
-
-@dataclasses.dataclass
-class QwenImageTransformerInputs(DenoiserInputs):
-
-    target_height: int
-    target_width: int
-    img_shapes: list[list[tuple]] = dataclasses.field(default_factory=list())
-    encoder_hidden_states: torch.Tensor | None = None
-    encoder_hidden_states_mask: torch.Tensor | None = None
-    timesteps: torch.Tensor | None = None
-    attention_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict())
-    ground_truths: torch.Tensor | None = None
-
-
-@dataclasses.dataclass
-class QwenImageTransformerOutputs:
-
-    target_height: int
-    target_width: int
-    predictions: torch.Tensor
-    timesteps: torch.Tensor | None = None
-    ground_truths: torch.Tensor | None = None
-    loss: torch.Tensor | None = None
 
 
 class QwenImageEditPlusManager(DiTPipelineManager):
@@ -72,33 +45,31 @@ class QwenImageEditPlusManager(DiTPipelineManager):
         self.vae = AutoencoderKLQwenImage.from_pretrained(
             pretrained_model_name_or_path,
             subfolder="vae",
-        ).to(device, dtype=torch_dtype)
+            torch_dtype=torch_dtype,
+        ).to(device)
 
         self.transformer = QwenImageTransformer2DModel.from_pretrained(
             pretrained_model_name_or_path,
             subfolder="transformer",
-        ).to(device, dtype=torch_dtype)
-
-        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            pretrained_model_name_or_path,
-            subfolder="text_encoder",
-        ).to(device, dtype=torch_dtype)
+            torch_dtype=torch_dtype,
+        ).to(device)
 
         self.text_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             pretrained_model_name_or_path,
-            text_encoder=self.text_encoder,
             scheduler=None,
             vae=None,
             transformer=None,
-        ).to(device, dtype=torch_dtype)
+            torch_dtype=torch_dtype,
+        ).to(device)
 
         self.vae.requires_grad_(False)
         self.transformer.requires_grad_(False)
-        for _, c in self.text_pipeline.components.items():
-            if hasattr(c, "requires_grad_"):
-                c.requires_grad_(False)
+        self.text_pipeline.text_encoder.requires_grad_(False)
 
     def preprocess_everything(self, batch, device, dtype):
+        r"""
+        Preprocess batched data, conduct reshape or any other augmentations on it.
+        """
         prompt: str | list[str] = batch["prompt"]
         conditions: list[torch.Tensor] = batch["conditions"]
         target: torch.Tensor = batch["target"]
@@ -115,20 +86,14 @@ class QwenImageEditPlusManager(DiTPipelineManager):
         batch["prompt"] = prompt
         batch["conditions"] = [c.to(device, dtype=dtype) for c in conditions]
         batch["target"] = target.to(device, dtype=dtype)
-        batch["conditions_to_text_encoder"] = [c.to(device, dtype=dtype) for c in small_conditions]
+        batch["conditions_to_text_pipeline"] = [c.to(device, dtype=dtype) for c in small_conditions]
 
-        print(f"{prompt=}")
-        print(f"{batch['target'].shape=} | {batch['target'].device=} | {batch['target'].dtype=}")
-        print(
-            f"conditions shapes={[c.shape for c in conditions]} | conditions devices={[c.device for c in conditions]}"
-        )
-        print(f"conditions to text encoder shapes={[c.shape for c in small_conditions]}")
         return batch
 
     def encode_prompt(
         self,
         prompt: str | list[str],
-        image_conditions: torch.Tensor | list[torch.Tensor] | None = None,
+        conditions: torch.Tensor | list[torch.Tensor] | None = None,
         prompt_embeds: torch.Tensor | None = None,
         prompt_embeds_mask: torch.Tensor | None = None,
         device: torch.device = None,
@@ -142,11 +107,11 @@ class QwenImageEditPlusManager(DiTPipelineManager):
             return prompt_embeds, prompt_embeds_mask
 
         # NOTE: QwenImageEditPlus encode_prompt should pass list of tensors for multi-image forward
-        if not isinstance(image_conditions, list):
-            image_conditions = [image_conditions]
+        if not isinstance(conditions, list):
+            conditions = [conditions]
         return self.text_pipeline.encode_prompt(
             prompt=prompt,
-            image=image_conditions,
+            image=conditions,
             device=device,
             num_images_per_prompt=1,
             prompt_embeds=prompt_embeds,
@@ -168,11 +133,7 @@ class QwenImageEditPlusManager(DiTPipelineManager):
         Return:
             Tensor [B, z_dim, 1, H//vae_scale_factor, W//vae_scale_factor]
         """
-        vae_latents = retrieve_latents(
-            self.vae.encode(image),
-            generator=generator,
-            sample_mode=sample_mode,
-        ).to(device, dtype)
+        vae_latents = retrieve_latents(self.vae.encode(image), generator, sample_mode).to(device, dtype)
         latents_mean = torch.tensor(
             self.vae.config.latents_mean,
             device=device,
@@ -183,147 +144,162 @@ class QwenImageEditPlusManager(DiTPipelineManager):
             device=device,
             dtype=dtype,
         ).view(1, self.vae.config.z_dim, 1, 1, 1)
-        print(device, dtype)
-        print(vae_latents.device, vae_latents.dtype)
-        print(latents_mean.device, latents_mean.dtype)
-        print(latents_std.device,latents_std.dtype)
         return (vae_latents - latents_mean) / latents_std
 
-    def add_noise(self, target_latents: torch.Tensor, generator, device, dtype):
-        r"""
-        Add noises to target and return the ground truth,
-        re-write to support other operations.
-        """
-        B = target_latents.shape[0]
-        noise_latents = torch.randn_like(target_latents, device=device, dtype=dtype, generator=generator)
-        img_seq_len = target_latents.shape[1]
-
-        t = self.scheduler.sample_timesteps(B, generator, device, dtype)
-        mu = self.scheduler.calculate_shift_mu(img_seq_len)
-        sigmas = self.scheduler.time_shift(t, mu)
-        print(f"{t.dtype=}")
-        print(f"{sigmas.dtype=}")
-        
-        print(f"{noise_latents.shape=}")
-        print(f"{target_latents.shape=}")
-        noisy_target_latents = self.scheduler.add_noise(sigmas, noise_latents, target_latents)
-        ground_truths = self.scheduler.get_ground_truth(noise_latents, target_latents)
-        print(f"{noisy_target_latents.dtype=}")
-        print(f"{ground_truths.dtype=}")
-
-        return t, noisy_target_latents, ground_truths
-
-    def preprocess_denoiser_inputs(
-        self,
-        prompt_embeds: torch.Tensor,
-        target_latents: torch.Tensor,
-        prompt_embeds_mask: torch.Tensor | None = None,
-        image_condition_latents: list[torch.Tensor] | torch.Tensor | None = None,
-        generator: torch.Generator | None = None,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        r"""
-        Args:
-            prompt_embeds (Tensor): [B, L, C]
-            target_latents (Tensor): [B, C, 1, H, W]
-            image_condition_latents (Tensor or list of Tensor or None): [B, C, 1, H, W]
-        """
-        # ---------------- Process Images ---------------- #
-        # Pack and reshape latents to [B, L, C]
-        B, C, _, target_H, target_W = target_latents.shape
-        target_latents = QwenImageEditPlusPipeline._pack_latents(
-            latents=target_latents,
-            batch_size=B,
-            num_channels_latents=C,
-            height=target_H,
-            width=target_W,
-        )
-
-        # ------------------ Add Noises ------------------ #
-        t, noisy_target_latents, ground_truths = self.add_noise(
-            target_latents=target_latents,
-            generator=generator,
+    def encode_everything(self, batch, generator, device, dtype):
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(
+            prompt=batch.get("prompt", None),
+            conditions=batch.get("conditions_to_text_pipeline", None),
+            prompt_embeds=batch.get("prompt_embeds", None),
+            prompt_embeds_mask=batch.get("prompt_embeds_mask", None),
             device=device,
-            dtype=dtype,
         )
 
-        # --------------- Construct Inputs --------------- #
-        input_latents = torch.cat([noisy_target_latents], dim=1)
-        input_shapes = [(1, target_H // self.transformer_pacth_size, target_W // self.transformer_pacth_size)]
+        input_shapes = []
+        target = self.encode_image(image=batch["target"], generator=generator, device=device, dtype=dtype)
+        B, C, _, H, W = target.shape
+        input_shapes.append((1, H // self.transformer_pacth_size, W // self.transformer_pacth_size))
+        target_latents = QwenImageEditPlusPipeline._pack_latents(target, B, C, H, W)
 
-        if image_condition_latents is not None:
-            if not isinstance(image_condition_latents, list):
-                image_condition_latents = [image_condition_latents]
-            for image_conds in image_condition_latents:
-                cond_H, cond_W = image_conds.shape[-2:]
-                image_conds = QwenImageEditPlusPipeline._pack_latents(
-                    latents=image_conds,
-                    batch_size=image_conds.shape[0],
-                    num_channels_latents=image_conds.shape[1],
-                    height=image_conds.shape[3],
-                    width=image_conds.shape[4],
-                )
-                input_shapes.append((1, cond_H // self.transformer_pacth_size, cond_W // self.transformer_pacth_size))
-                input_latents = torch.cat([input_latents, image_conds], dim=1)
-
-        input_shapes = [input_shapes] * noisy_target_latents.shape[0]
-
-        return QwenImageTransformerInputs(
-            target_height=target_H,
-            target_width=target_W,
-            hidden_states=input_latents,
-            encoder_hidden_states=prompt_embeds,
-            encoder_hidden_states_mask=prompt_embeds_mask,
-            img_shapes=input_shapes,
-            timesteps=t,
-            attention_kwargs={},
-            ground_truths=ground_truths,
+        conditions = [
+            self.encode_image(image=img, generator=generator, sample_mode="sample", device=device, dtype=dtype)
+            for img in batch.get("conditions", [])
+        ]
+        input_shapes.extend(
+            [
+                (1, c.shape[-2] // self.transformer_pacth_size, c.shape[-1] // self.transformer_pacth_size)
+                for c in conditions
+            ]
         )
+        input_shapes = [input_shapes] * B
+        condition_latents = [
+            QwenImageEditPlusPipeline._pack_latents(
+                latent, latent.shape[0], latent.shape[1], latent.shape[-2], latent.shape[-1]
+            )
+            for latent in conditions
+        ]
+
+        noise = torch.randn_like(target_latents, generator=generator, device=device, dtype=dtype)
+        t = self.scheduler.sample_timesteps(B, generator=generator, device=device, dtype=dtype)
+        mu = self.scheduler.calculate_shift_mu(target_latents.shape[1])
+        sigmas = self.scheduler.time_shift(t, mu)
+
+        return {
+            "height": batch["target"].shape[-2],
+            "width": batch["target"].shape[-1],
+            "timesteps": sigmas,
+            "mu": mu,
+            "sigmas": sigmas,
+            "noise": noise,
+            "prompt_embeds": prompt_embeds,
+            "prompt_embeds_mask": prompt_embeds_mask,
+            "target_latents": target_latents,
+            "condition_latents": condition_latents,
+            "image_shapes": input_shapes,
+        }
+
+    def add_noise(self, eps: torch.Tensor, x0: torch.Tensor, conditions: list[torch.Tensor], sigmas: torch.Tensor):
+        noisy_latents = self.scheduler.add_noise(sigmas, eps, x0)
+        truth_latents = self.scheduler.get_ground_truth(eps, x0)
+        return noisy_latents, truth_latents
 
     def compute_loss(self, predictions: torch.Tensor, ground_truths: torch.Tensor) -> torch.Tensor:
         r"""Compute loss without masks and weights"""
         return (
             F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
             .reshape(predictions.shape[0], -1)
-            .mean(dim=-1)
+            .mean(dim=1)
         ).mean()
 
-    def postprocess_denoiser_outputs[T](self, denoiser_outputs: QwenImageTransformerOutputs) -> T:
-        predictions = QwenImageEditPlusPipeline._unpack_latents(
-            predictions,
-            height=denoiser_outputs.target_height * self.vae_scale_factor,
-            width=denoiser_outputs.target_width * self.vae_scale_factor,
-            vae_scale_factor=self.vae_scale_factor,
-        )
+    def decode_image(self, predictions: torch.Tensor, device, dtype, output_type: str = "pt") -> torch.Tensor:
+        latents_mean = torch.tensor(
+            self.vae.config.latents_mean,
+            device=device,
+            dtype=dtype,
+        ).view(1, self.vae.config.z_dim, 1, 1, 1)
+        latents_std = torch.tensor(
+            self.vae.config.latents_std,
+            device=device,
+            dtype=dtype,
+        ).view(1, self.vae.config.z_dim, 1, 1, 1)
+        predictions = predictions * latents_std + latents_mean
+        predictions = self.vae.decode(predictions, return_dict=False)[0][:, :, 0]
+        predictions = self.text_pipeline.image_processor.postprocess(predictions, output_type=output_type)
         return predictions
 
-    def denoise(self, denoiser_inputs: QwenImageTransformerInputs) -> torch.Tensor:
-        r"""
-        Args:
-            timestep (float or Tensor): Range [0, 1]
-        """
-        print(denoiser_inputs.encoder_hidden_states.dtype, denoiser_inputs.encoder_hidden_states.shape)
-        print(denoiser_inputs.ground_truths.dtype, denoiser_inputs.ground_truths.shape)
-        print(denoiser_inputs.hidden_states.dtype, denoiser_inputs.hidden_states.shape)
+    def denoise(
+        self,
+        hidden_states: torch.Tensor,
+        timesteps: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        prompt_embeds_mask: torch.Tensor,
+        img_shapes: list[list[tuple[int]]],
+        img_seq_len: int,
+        **kwargs,
+    ) -> torch.Tensor:
+        dtype = hidden_states.dtype
         predictions: torch.Tensor = self.transformer(
-            hidden_states=denoiser_inputs.hidden_states,
-            timestep=denoiser_inputs.timesteps,
-            encoder_hidden_states_mask=denoiser_inputs.encoder_hidden_states_mask,
-            encoder_hidden_states=denoiser_inputs.encoder_hidden_states,
-            img_shapes=denoiser_inputs.img_shapes,
-            attention_kwargs=denoiser_inputs.attention_kwargs,
+            hidden_states=hidden_states,
+            timestep=timesteps,
+            encoder_hidden_states=prompt_embeds,
+            encoder_hidden_states_mask=prompt_embeds_mask,
+            img_shapes=img_shapes,
+            attention_kwargs=kwargs.get("attention_kwargs", {}),
             return_dict=False,
         )[0]
-        # First batch, first element
-        pred_length = (denoiser_inputs.target_height // 2) * (denoiser_inputs.target_width // 2)
-        predictions = predictions[:, :pred_length]
-        loss = self.compute_loss(predictions, denoiser_inputs.ground_truths)
-        return QwenImageTransformerOutputs(
-            target_height=denoiser_inputs.target_height,
-            target_width=denoiser_inputs.target_width,
-            predictions=predictions,
-            timesteps=denoiser_inputs.timesteps,
-            ground_truths=denoiser_inputs.ground_truths,
-            loss=loss,
+        predictions = predictions[:, :img_seq_len]
+        return predictions.to(dtype=dtype)
+
+    def forward_step(self, batch, generator=None, device=None, dtype=None):
+        inputs = self.preprocess_everything(batch, device, dtype)
+        inputs = self.encode_everything(inputs, generator, device, dtype)
+        noisy_latents, truth_latents = self.add_noise(
+            inputs["noise"], inputs["target_latents"], inputs["condition_latents"], inputs["sigmas"]
         )
+        hidden_states = torch.cat([noisy_latents] + [c for c in inputs["condition_latents"]], dim=1)
+        predictions = self.denoise(
+            hidden_states,
+            inputs["timesteps"],
+            inputs["prompt_embeds"],
+            inputs["prompt_embeds_mask"],
+            inputs["image_shapes"],
+            noisy_latents.shape[1],
+        )
+        loss = self.compute_loss(predictions, truth_latents)
+        return loss
+
+    @torch.inference_mode()
+    def eval_step(self, batch, num_inference_steps: int, generator=None, device=None, dtype=None) -> torch.Tensor:
+        r"""
+        Evaluation when training, the ground truths are provided.
+        """
+        from tqdm import tqdm
+
+        inputs = self.preprocess_everything(batch, device, dtype)
+        inputs = self.encode_everything(inputs, generator, device, dtype)
+
+        denoised = inputs["noise"]
+        for delta_sigma, t in tqdm(
+            self.scheduler.inference_delta_sigmas(num_inference_steps, inputs["mu"]), total=num_inference_steps
+        ):
+            hidden_states = torch.cat([denoised] + [c for c in inputs["condition_latents"]], dim=1)
+            t = t.expand(hidden_states.shape[0]).to(device, dtype=dtype)
+            delta_sigma = delta_sigma.to(device, dtype=dtype)
+            predictions = self.denoise(
+                hidden_states,
+                t,
+                inputs["prompt_embeds"],
+                inputs["prompt_embeds_mask"],
+                inputs["image_shapes"],
+                denoised.shape[1],
+            )
+            denoised = denoised + delta_sigma * predictions
+
+        denoised = QwenImageEditPlusPipeline._unpack_latents(
+            denoised,
+            height=inputs["height"],
+            width=inputs["width"],
+            vae_scale_factor=self.vae_scale_factor,
+        )
+        output = self.decode_image(denoised, device, dtype)
+        return output
