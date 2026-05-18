@@ -1,4 +1,4 @@
-_target_: trainer.MaskFlowLoRATrainer
+_target_: trainer.LoRATrainer
 _recursive_: false
 
 pipeline_configs: ${pipeline}
@@ -21,9 +21,10 @@ log_dir: ${project.log_dir}
 training_steps_per_process: 1000
 save_steps_per_process: 100
 eval_steps_per_process: 100
-random_seed: 0
+random_seed: 42
 num_epochs: null
 num_warmup_steps_per_process: null
 max_grad_norm: 1.0
+num_inference_steps: 16
 cudnn_deterministic: false
 cudnn_benchmark: true
