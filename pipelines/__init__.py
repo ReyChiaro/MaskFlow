@@ -1,3 +1,2 @@
-from .pipeline_manager import DiTPipelineManager
-from .qwenimage_edit_plus import QwenImageEditPlusManager
-from .qwenimage_mask_flow import QwenImageMaskFlowManager
+from .base_pipeline import BasePipeline
+from .qwenimage.qwenimage_edit_plus import QwenImageEditPlus

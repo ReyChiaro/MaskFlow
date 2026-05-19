@@ -1,2 +1,2 @@
-from .trainer import Trainer
-from .lora import LoRATrainer
+from .base_trainer import BaseTrainer
+from .lora import LoraTrainer

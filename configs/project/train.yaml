@@ -1,8 +1,7 @@
 timestamp: ${now:%Y%m%d-%H%M%S}
 
 project_name: project-train
-output_dir: outputs/experiments/${project.timestamp}
-backup_dir: ${project.output_dir}/backup
+output_dir: outputs/experiments/${project.project_name}/${project.timestamp}
 checkpoint_dir: ${project.output_dir}/checkpoints
 evaluation_dir: ${project.output_dir}/evaluations
 log_dir: ${project.output_dir}/logs
