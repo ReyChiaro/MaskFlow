@@ -1,39 +1,26 @@
 import os
 import json
 import torch
-import dataclasses
 import torchvision.transforms.functional as T
 
+from pathlib import Path
 from torch.utils.data import Dataset
 from PIL import Image
-from loguru import logger
 from typing import Any
-
-from data_module.utils import is_bucketed_dataset
 
 
 class SchemaDataset(Dataset):
 
-    def __init__(
-        self,
-        image_root: str,
-        data_file: str,
-        data_load_ratio: float = 1.0,
-        enable_aspect_bucket: bool = False,
-    ):
+    def __init__(self, image_root: str, data_file: str, data_load_ratio: float = 1.0):
         r"""
         Args:
             data_file (str): JSON or JSONL file.
+
+        TODO: Add aspect ratio bucket
         """
         super().__init__()
         self.image_root = image_root
         self.data_file = data_file
-        self.is_bucketed = is_bucketed_dataset(self.data_file)
-
-        # TODO: Add aspect ratio bucket
-        if self.is_bucketed:
-            logger.error(f"Current dataset not support aspect ratio buckets.")
-            raise NotImplementedError(f"Current dataset not support aspect ratio buckets.")
 
         self.samples = self._load_data_file(load_ratio=data_load_ratio)
         self.num_samples = len(self.samples)
@@ -60,11 +47,13 @@ class SchemaDataset(Dataset):
         prompt = sample["prompt"]
         conditions = sample["conditions"]
         target = sample["target"]
+        image_name = Path(target).stem
 
         conditions = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
         target = self._load_image_tensor(os.path.join(self.image_root, target))
 
         return {
+            "image_name": image_name,
             "prompt": self._preprocess_prompt(prompt),
             "conditions": self._preprocess_conditions(conditions),
             "target": self._preprocess_target(target),

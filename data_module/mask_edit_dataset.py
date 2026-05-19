@@ -3,6 +3,7 @@ import math
 import torch
 import torchvision.transforms.functional as T
 
+from pathlib import Path
 from typing import Any
 
 from data_module.dataset import SchemaDataset
@@ -18,11 +19,10 @@ class MaskEditDataset(SchemaDataset):
         data_load_ratio=1,
         max_resolution: int = 1024 * 1024,
         divisible_by: int = 16,
-        enable_aspect_bucket=False,
         enable_prompt_truncation: bool = False,
         replace_prompt_placeholder_with: str | None = None,
     ):
-        super().__init__(image_root, data_file, data_load_ratio, enable_aspect_bucket)
+        super().__init__(image_root, data_file, data_load_ratio)
 
         self.divisible_by = divisible_by
         self.max_resolution = max_resolution
@@ -80,6 +80,7 @@ class MaskEditDataset(SchemaDataset):
         prompt = sample["prompt"]
         conditions = sample["conditions"]
         target = sample["target"]
+        image_name = Path(target).stem
 
         conditions: list[torch.Tensor] = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
         target: torch.Tensor = self._load_image_tensor(os.path.join(self.image_root, target))
@@ -90,6 +91,7 @@ class MaskEditDataset(SchemaDataset):
         conditions = [self._reshape_to_divisible_max_resolution(c, aspect_ratio) for c in conditions]
 
         return {
+            "image_name": image_name,
             "prompt": self._preprocess_prompt(prompt),
             "conditions": self._preprocess_conditions(conditions),
             "target": self._preprocess_target(target),

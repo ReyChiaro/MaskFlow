@@ -1,12 +1,12 @@
-_target_: pipelines.qwenimage_edit_plus.QwenImageEditPlusManager
-_recursive_: false
+_target_: pipelines.QwenImageEditPlus
+_recursive_: true
 
-pretrained_model_name_or_path: Qwen/Qwen-Image-Edit-2511
+pretrained_model: Qwen/Qwen-Image-Edit-2511
 
 # If null, the noise scheduler will be initialized with diffusers FlowMatchEulerDiscreteScheduler
 # else, use schedulers.flow_matching.RectifiedFlowMatchingScheduler
-scheduler_configs:
-  _target_: schedulers.flow_matching.RectifiedFlowMatchingScheduler
+scheduler:
+  _target_: schedulers.RectifiedFlowMatchingScheduler
   weighting_scheme: logit_normal
   logit_normal_mean: 0.0
   logit_normal_std: 1.0
