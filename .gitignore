@@ -24,3 +24,5 @@ deprecated/
 _test*.py
 *.jsonl
 *.json
+*.jpg
+*.png

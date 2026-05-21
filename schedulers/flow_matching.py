@@ -83,13 +83,18 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
         else:
             mu = self.shift_mu
 
-        timesteps = torch.from_numpy(np.linspace(1.0, 0, num_inference_steps + 1, endpoint=True)).float()
+        timesteps = torch.from_numpy(
+            np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps, endpoint=True)
+        ).float()
         sigmas = self.time_shift(timesteps, mu).float()
-        for step in range(num_inference_steps):
+        sigmas = torch.cat([sigmas, torch.zeros((1,))])
+        for step in range(num_inference_steps + 1):
             inferencer = _Inferencer()
             try:
-                yield xt, sigmas[step:step+1], inferencer
+                yield xt, sigmas[step : step + 1], inferencer
             finally:
+                if step >= num_inference_steps:
+                    continue
                 sigma = sigmas[step]
                 sigma_next = sigmas[step + 1]
                 xt = self.step(xt.float(), inferencer.pred_v, sigma_next - sigma).to(xt.device, dtype=xt.dtype)
