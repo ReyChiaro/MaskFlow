@@ -33,7 +33,7 @@ class BasePipeline:
         pass
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps: int = 50, cfg: float = 0.0):
+    def eval_step(self, batch, global_step, num_inference_steps: int = 50, cfg_scale: float = 0.0):
         pass
 
     @torch.inference_mode()

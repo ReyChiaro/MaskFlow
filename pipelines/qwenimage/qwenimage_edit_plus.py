@@ -1,5 +1,6 @@
 import copy
 import torch
+import random
 import torch.nn.functional as F
 
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
@@ -25,6 +26,8 @@ class QwenImageEditPlus(BasePipeline):
     generator: torch.Generator
     device: torch.device
     dtype: torch.dtype
+
+    cfg_dropout: float
 
     vae: AutoencoderKLQwenImage = field(init=False, default=None)
     transformer: QwenImageTransformer2DModel = field(init=False, default=None)
@@ -71,8 +74,9 @@ class QwenImageEditPlus(BasePipeline):
         """
         raw_batch = copy.deepcopy(batch)
         prompt: str | list[str] = batch["prompt"]
-        conditions: list[torch.Tensor] = batch["conditions"]
-        target: torch.Tensor = batch["target"]
+        negative_prompt: str | list[str] = batch["negative_prompt"]
+        conditions: list[torch.Tensor] = [c.to(self.device, dtype=self.dtype) for c in batch["conditions"]]
+        target: torch.Tensor = batch["target"].to(self.device, dtype=self.dtype)
 
         # ---------------- Preprocess ---------------- #
         # To tensor and reshape to target areas
@@ -86,9 +90,10 @@ class QwenImageEditPlus(BasePipeline):
         return {
             "raw": raw_batch,
             "prompt": prompt,
-            "conditions_vlm": [c.to(self.device, dtype=self.dtype) for c in conditions_vlm],
-            "conditions_dit": [c.to(self.device, dtype=self.dtype) for c in conditions_dit],
-            "target": target.to(self.device, dtype=self.dtype),
+            "negative_prompt": negative_prompt,
+            "conditions_vlm": conditions_vlm,
+            "conditions_dit": conditions_dit,
+            "target": target,
         }
 
     def encode_prompt(self, prompt: str, conditions: torch.Tensor | list[torch.Tensor]) -> tuple[torch.Tensor]:
@@ -144,9 +149,12 @@ class QwenImageEditPlus(BasePipeline):
         """
         sample_mode = "sample"
         processed_data = self.preprocess_inputs(batch)
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(
-            processed_data["prompt"], processed_data["conditions_vlm"]
-        )
+
+        # Conduct CFG dropout
+        prompt = processed_data["prompt"]
+        if random.random() < self.cfg_dropout:
+            prompt = ""
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, processed_data["conditions_vlm"])
 
         image_shapes = []
         conditions_dit = processed_data["conditions_dit"]
@@ -187,16 +195,23 @@ class QwenImageEditPlus(BasePipeline):
             "image_shapes": image_shapes,
         }
 
-    def prepare_eval_inputs(self, batch):
+    def prepare_eval_inputs(self, batch, cfg_scale: float = 0):
         r"""
         Prepare training evaluation inputs.
         The sample mode for VAE is fixed to `argmax`, `target` must be provided.
         """
         sample_mode = "argmax"
         processed_data = self.preprocess_inputs(batch)
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(
-            processed_data["prompt"], processed_data["conditions_vlm"]
-        )
+
+        prompt = processed_data["prompt"]
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, processed_data["conditions_vlm"])
+
+        neg_prompt_embeds, neg_prompt_embeds_mask = None, None
+        if cfg_scale > 0:
+            negative_prompt = processed_data["negative_prompt"]
+            neg_prompt_embeds, neg_prompt_embeds_mask = self.encode_prompt(
+                negative_prompt, processed_data["conditions_vlm"]
+            )
 
         image_shapes = []
         conditions_dit = processed_data["conditions_dit"]
@@ -231,6 +246,8 @@ class QwenImageEditPlus(BasePipeline):
             "noise": noise,
             "prompt_embeds": prompt_embeds,
             "prompt_embeds_mask": prompt_embeds_mask,
+            "negative_prompt_embeds": neg_prompt_embeds,
+            "negative_prompt_embeds_mask": neg_prompt_embeds_mask,
             "conditions": cond_latents,
             "image_shapes": image_shapes,
         }
@@ -281,25 +298,41 @@ class QwenImageEditPlus(BasePipeline):
         return loss
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps: int = 50, cfg: float = 0.0):
-        r"""
-        TODO: Support CFG
-        """
+    def eval_step(self, batch, num_inference_steps: int = 50, cfg_scale: float = 0.0):
         from tqdm import tqdm
-        inputs = self.prepare_eval_inputs(batch)
+
+        inputs = self.prepare_eval_inputs(batch, cfg_scale)
 
         xt = inputs["noise"]
         with self.scheduler.inference_sampler(xt, num_inference_steps, xt.shape[1]) as sampler:
             for xt, t, inferencer in tqdm(sampler, total=num_inference_steps):
                 hidden_states = torch.cat([xt] + [c for c in inputs["conditions"]], dim=1)
+                timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
                 pred = self.denoise(
                     hidden_states,
-                    t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype),
+                    timestep,
                     inputs["prompt_embeds"],
                     inputs["prompt_embeds_mask"],
                     inputs["image_shapes"],
                     xt.shape[1],
                 )
+
+                # Do CFG
+                if cfg_scale > 0:
+                    neg_pred = self.denoise(
+                        hidden_states,
+                        timestep,
+                        inputs["negative_prompt_embeds"],
+                        inputs["negative_prompt_embeds_mask"],
+                        inputs["image_shapes"],
+                        xt.shape[1],
+                    )
+                    cfg_pred = neg_pred + cfg_scale * (pred - neg_pred)
+
+                    pred_norm = torch.norm(pred, dim=-1, keepdim=True)
+                    cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
+                    pred = (pred_norm / cfg_norm) * cfg_pred
+
                 inferencer.step(pred)
         output = QwenImageEditPlusPipeline._unpack_latents(xt, inputs["height"], inputs["width"], self.vae_scale_factor)
         output = self.decode_image(output)

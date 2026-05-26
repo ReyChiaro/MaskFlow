@@ -109,6 +109,7 @@ class BaseTrainer(_BaseTrainer):
 
     # Inference
     num_inference_steps: int = 50
+    cfg_scale: float = 0
 
     def __post_init__(self):
         self.init_handlers = [
@@ -314,20 +315,23 @@ class BaseTrainer(_BaseTrainer):
         os.makedirs(save_dir, exist_ok=True)
         logger.info(f"Evaluate start, save to {save_dir}.")
         for step, batch in enumerate(self.eval_loader):
-            output = self.pipe.eval_step(batch)
-            prompt = batch["prompt"]
+            output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
+
             conditions = batch["conditions"]
             target = batch["target"]
             image_name = batch["image_name"][0]
 
             # 4D
-            tensors = [output, *conditions, target]
+            tensors = [*conditions, target, output]
             max_h = max([t.shape[-2] for t in tensors])
             tensors = [t.squeeze(0) for t in tensors]
             tensors = [
-                F.pad(t, (0, 0, 0, max_h - t.shape[1]), mode="constant", value=0).to(
-                    self.device, dtype=self._eval_dtype
-                )
+                F.pad(
+                    input=t,
+                    pad=(0, 0, 0, max_h - t.shape[1]),
+                    mode="constant",
+                    value=0,
+                ).to(self.device, dtype=self._eval_dtype)
                 for t in tensors
             ]
             tensors = torch.cat(tensors, dim=-1)

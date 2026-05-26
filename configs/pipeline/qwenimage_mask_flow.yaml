@@ -2,6 +2,7 @@ _target_: pipelines.QwenImageMaskFlow
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
+cfg_dropout: 0.1
 
 mask_dilation_kernel: 75
 mask_blur_kernel: 75

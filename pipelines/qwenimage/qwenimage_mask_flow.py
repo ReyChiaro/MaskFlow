@@ -1,4 +1,5 @@
 import copy
+import random
 import torch
 import torch.nn.functional as F
 import dataclasses
@@ -69,6 +70,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         """
         raw_batch = copy.deepcopy(batch)
         prompt: str | list[str] = batch["prompt"]
+        negative_prompt: str | list[str] = batch["negative_prompt"]
         conditions: list[torch.Tensor] = [c.to(self.device, dtype=self.dtype) for c in batch["conditions"]]
         target: torch.Tensor = batch["target"].to(self.device, dtype=self.dtype)
 
@@ -89,14 +91,13 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         conditions_vlm = [self.image_processor.resize(c, cond_h, cond_w) for c in conditions]
         target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
         conditions_dit = [self.image_processor.preprocess(c, h, w).unsqueeze(2) for c in conditions]
-        # mask = self.image_processor.preprocess(mask, h, w).unsqueeze(2)
-        # edge = self.image_processor.preprocess(edge, h, w).unsqueeze(2)
         mask = self.image_processor.resize(mask, h, w)
         edge = self.image_processor.resize(edge, h, w)
 
         return {
             "raw": raw_batch,
             "prompt": prompt,
+            "negative_prompt": negative_prompt,
             "mask": mask,
             "edge": edge,
             "conditions_vlm": conditions_vlm,
@@ -111,9 +112,12 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         """
         sample_mode = "sample"
         processed_data = self.preprocess_inputs(batch)
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(
-            processed_data["prompt"], processed_data["conditions_vlm"]
-        )
+
+        # Conduct CFG dropout
+        prompt = processed_data["prompt"]
+        if random.random() < self.cfg_dropout:
+            prompt = ""
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, processed_data["conditions_vlm"])
 
         image_shapes = []
         conditions_dit = processed_data["conditions_dit"]
@@ -124,8 +128,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         # ---------------- Encode and Pack ---------------- #
         # Encode
         tgt = self.encode_image(target, sample_mode)
-        # mask = self.encode_image(mask, sample_mode)
-        # edge = self.encode_image(edge, sample_mode)
         mask = self.encode_mask(mask)
         edge = self.encode_mask(edge)
         conds = [self.encode_image(c, sample_mode) for c in conditions_dit]
@@ -169,16 +171,23 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             "image_shapes": image_shapes,
         }
 
-    def prepare_eval_inputs(self, batch):
+    def prepare_eval_inputs(self, batch, cfg_scale: float = 0):
         r"""
         Prepare training evaluation inputs.
         The sample mode for VAE is fixed to `argmax`, `target` must be provided.
         """
         sample_mode = "argmax"
         processed_data = self.preprocess_inputs(batch)
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(
-            processed_data["prompt"], processed_data["conditions_vlm"]
-        )
+
+        prompt = processed_data["prompt"]
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, processed_data["conditions_vlm"])
+
+        neg_prompt_embeds, neg_prompt_embeds_mask = None, None
+        if cfg_scale > 0:
+            negative_prompt = processed_data["negative_prompt"]
+            neg_prompt_embeds, neg_prompt_embeds_mask = self.encode_prompt(
+                negative_prompt, processed_data["conditions_vlm"]
+            )
 
         image_shapes = []
         conditions_dit = processed_data["conditions_dit"]
@@ -196,8 +205,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             target.shape[-1] // self.vae_scale_factor,
         )
         noise = torch.randn(noise_shape, generator=self.generator, device=self.device, dtype=self.dtype)
-        # mask = self.encode_image(mask, sample_mode)
-        # edge = self.encode_image(edge, sample_mode)
         mask = self.encode_mask(mask)
         edge = self.encode_mask(edge)
         conds = [self.encode_image(c, sample_mode) for c in conditions_dit]
@@ -225,8 +232,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             "noise": noise,
             "mask": mask,
             "edge": edge,
+            "target": processed_data["raw_batch"]["target"].to(self.device, dtype=self.dtype),
             "prompt_embeds": prompt_embeds,
             "prompt_embeds_mask": prompt_embeds_mask,
+            "negative_prompt_embeds": neg_prompt_embeds,
+            "negative_prompt_embeds_mask": neg_prompt_embeds_mask,
             "conditions": cond_latents,
             "image_shapes": image_shapes,
         }
@@ -242,7 +252,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         if mask is not None and self.mask_loss_weight > 0:
             loss_field = mask * loss_field
-            loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
             # total_area = mask.shape[1]
             # mask_area = mask.sum()
             # mask_loss = mask * loss_field
@@ -253,6 +262,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         if edge is not None and self.edge_loss_weight > 0:
             pass
+
+        loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
 
         return loss
 
@@ -271,92 +282,47 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         return loss
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps: int = 50, cfg: float = 0.0):
-        r"""
-        TODO: Support CFG
-        """
+    def eval_step(self, batch, num_inference_steps: int = 50, cfg_scale: float = 0):
         from tqdm import tqdm
-        from torchvision.utils import save_image
-        from PIL import Image
 
-        inputs = self.prepare_eval_inputs(batch)
-
+        inputs = self.prepare_eval_inputs(batch, cfg_scale)
         xt = inputs["noise"]
         source = inputs["conditions"][0]
         mask = inputs["mask"]
-        edge = inputs["edge"]
-
-        source_image = QwenImageEditPlusPipeline._unpack_latents(
-            source, inputs["height"], inputs["width"], self.vae_scale_factor
-        )
-        source_image = self.decode_image(source_image)
-        mask_image = QwenImageEditPlusPipeline._unpack_latents(
-            mask, inputs["height"], inputs["width"], self.vae_scale_factor
-        )[:, :, 0]
-        edge_image = QwenImageEditPlusPipeline._unpack_latents(
-            edge, inputs["height"], inputs["width"], self.vae_scale_factor
-        )[:, :, 0]
-        mask_image = mask_image.mean(dim=1, keepdim=True).repeat(1, 3, 1, 1)
-        edge_image = edge_image.mean(dim=1, keepdim=True).repeat(1, 3, 1, 1)
-        mask_image = F.interpolate(mask_image, [inputs["height"], inputs["width"]])
-        edge_image = F.interpolate(edge_image, [inputs["height"], inputs["width"]])
-
-        colored_mask = copy.deepcopy(mask_image)
-        colored_mask[:, 1, ...] = 0
-        colored_mask[:, 2, ...] = 0
-        masked_source = torch.where(mask_image >= 1, 0.4 * source_image + 0.6 * colored_mask, source_image)
-
-        colored_edge = copy.deepcopy(edge_image)
-        colored_edge[:, 1, ...] = 0
-        colored_edge[:, 2, ...] = 0
-        edgeed_source = torch.where(edge_image >= 1, 0.4 * source_image + 0.6 * colored_edge, source_image)
 
         step = 0
         with self.scheduler.inference_sampler(xt, num_inference_steps, source, mask, xt.shape[1]) as sampler:
             for xt, t, inferencer in tqdm(sampler, total=num_inference_steps):
                 step += 1
                 hidden_states = torch.cat([xt] + [c for c in inputs["conditions"]], dim=1)
+                timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
+
                 pred = self.denoise(
                     hidden_states,
-                    t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype),
+                    timestep,
                     inputs["prompt_embeds"],
                     inputs["prompt_embeds_mask"],
                     inputs["image_shapes"],
                     xt.shape[1],
                 )
+
+                # Do CFG
+                if cfg_scale > 0:
+                    neg_pred = self.denoise(
+                        hidden_states,
+                        timestep,
+                        inputs["negative_prompt_embeds"],
+                        inputs["negative_prompt_embeds_mask"],
+                        inputs["image_shapes"],
+                        xt.shape[1],
+                    )
+                    cfg_pred = neg_pred + cfg_scale * (pred - neg_pred)
+
+                    pred_norm = torch.norm(pred, dim=-1, keepdim=True)
+                    cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
+                    pred = (pred_norm / cfg_norm) * cfg_pred
+
                 inferencer.step(pred)
-
-                output = QwenImageEditPlusPipeline._unpack_latents(
-                    xt, inputs["height"], inputs["width"], self.vae_scale_factor
-                )
-                output = self.decode_image(output)
-
-                tensor_to_save = torch.cat([source_image, mask_image, output], dim=-1)
-                masked_predict = torch.where(mask_image > 0, 0.4 * output + 0.6 * colored_mask, output)
-                mask_tensor_to_save = torch.cat([masked_source, mask_image, masked_predict], dim=-1)
-
-                edgeed_predict = torch.where(edge_image > 0, 0.4 * output + 0.6 * colored_edge, output)
-                edge_tensor_to_save = torch.cat([edgeed_source, edge_image, edgeed_predict], dim=-1)
-
-                save_image(
-                    torch.cat([tensor_to_save, mask_tensor_to_save, edge_tensor_to_save], dim=-2),
-                    f"outputs/experiments/project-train/_test_infer/infer-step-{step}.jpg",
-                )
-
-        # Gen gif
-        pil_images = [
-            Image.open(f"outputs/experiments/project-train/_test_infer/infer-step-{s}.jpg")
-            .convert("RGB")
-            .resize([inputs["height"], inputs["width"]])
-            for s in range(1, num_inference_steps + 1)
-        ]
-        pil_images[0].save(
-            "outputs/experiments/project-train/_test_infer/denoise.gif",
-            save_all=True,
-            append_images=pil_images[1:],
-            duration=100,
-            loop=0,
-        )
 
         output = QwenImageEditPlusPipeline._unpack_latents(xt, inputs["height"], inputs["width"], self.vae_scale_factor)
         output = self.decode_image(output)
