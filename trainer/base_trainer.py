@@ -276,11 +276,23 @@ class BaseTrainer(_BaseTrainer):
         for epoch in range(self.num_epochs):
             for step, batch in enumerate(self.train_loader):
                 global_step += 1
-                loss: torch.Tensor = self.pipe.forward_step(batch)
+                loss_dict = self.pipe.forward_step(batch)
+
+                if isinstance(loss_dict, dict):
+                    loss = loss_dict["loss"]
+                else:
+                    loss = loss_dict
+
                 loss = loss / self.gradient_accumulation_steps
                 loss.backward()
 
                 metrics["loss"] += loss.item()
+
+                if isinstance(loss_dict, dict):
+                    for k, l in loss_dict.items():
+                        if k not in metrics:
+                            metrics[k] = 0
+                        metrics[k] += l.item()
 
                 if global_step % self.gradient_accumulation_steps != 0:
                     continue
@@ -291,12 +303,14 @@ class BaseTrainer(_BaseTrainer):
                     self.lr_scheduler.step()
                 self.optimizer.zero_grad()
 
-                logger.info(f"Train [{global_step:->{align}}/{self.max_training_steps}] | loss {metrics['loss']:.6f}")
+                metric_info = " | ".join([f"{k}:{l:.6f}" for k, l in metrics.items()])
+                logger.info(f"Train [{global_step:->{align}}/{self.max_training_steps}]\n{metric_info}")
                 self.save_checkpoints(global_step)
                 self.evaluate(global_step)
 
                 # Clear record
-                metrics["loss"] = 0.0
+                for k in metrics:
+                    metrics[k] = 0.0
 
                 # dist.barrier()
 
@@ -317,12 +331,15 @@ class BaseTrainer(_BaseTrainer):
         for step, batch in enumerate(self.eval_loader):
             output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
 
+            if not isinstance(output, (tuple, list)):
+                output = [output]
+
             conditions = batch["conditions"]
             target = batch["target"]
             image_name = batch["image_name"][0]
 
             # 4D
-            tensors = [*conditions, target, output]
+            tensors = [*conditions, target, *output]
             max_h = max([t.shape[-2] for t in tensors])
             tensors = [t.squeeze(0) for t in tensors]
             tensors = [
