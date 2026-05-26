@@ -45,7 +45,7 @@ class SchemaDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         sample = self.samples[index % self.num_samples]
         prompt = sample["prompt"]
-        negative_prompt = sample.get("negative_prompt", None)
+        negative_prompt = sample.get("negative_prompt", "")
         conditions = sample["conditions"]
         target = sample["target"]
         image_name = Path(target).stem

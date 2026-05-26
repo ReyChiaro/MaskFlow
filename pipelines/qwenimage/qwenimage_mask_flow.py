@@ -194,6 +194,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         target = processed_data["target"]
         mask = processed_data["mask"]
         edge = processed_data["edge"]
+        mask4d = copy.deepcopy(mask)
+        edge4d = copy.deepcopy(edge)
 
         # ---------------- Encode and Pack ---------------- #
         # Encode
@@ -232,7 +234,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             "noise": noise,
             "mask": mask,
             "edge": edge,
-            "target": processed_data["raw_batch"]["target"].to(self.device, dtype=self.dtype),
+            "mask4d": mask4d,
+            "edge4d": edge4d,
+            "target": processed_data["raw"]["target"].to(self.device, dtype=self.dtype),
             "prompt_embeds": prompt_embeds,
             "prompt_embeds_mask": prompt_embeds_mask,
             "negative_prompt_embeds": neg_prompt_embeds,
@@ -250,22 +254,31 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     ) -> torch.Tensor:
         r"""Compute loss without masks and weights"""
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
-        if mask is not None and self.mask_loss_weight > 0:
-            loss_field = mask * loss_field
-            # total_area = mask.shape[1]
-            # mask_area = mask.sum()
-            # mask_loss = mask * loss_field
-            # mask_loss = self.mask_loss_weight
+        loss_dict = {"loss": 0}
 
-            # loss = mask_loss
-            pass
+        if mask is not None:
+            mask_field = mask * loss_field
+
+            if self.mask_loss_weight > 0:
+                total_area = mask.shape[1]
+                mask_area = mask.sum()
+                mask_field = self.mask_loss_weight * (mask_area / total_area) * mask_field
+
+            mask_loss = (mask_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+            loss_dict["mask_loss"] = mask_loss
+            loss_dict["loss"] = loss_dict["loss"] + mask_loss
 
         if edge is not None and self.edge_loss_weight > 0:
-            pass
+            edge_field = self.edge_loss_weight * edge * loss_field
+            edge_loss = (edge_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+            loss_dict["edge_loss"] = edge_loss
+            loss_dict["loss"] = loss_dict["loss"] + edge_loss
 
-        loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+        if loss_dict["loss"] == 0:
+            loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+            loss_dict["loss"] = loss
 
-        return loss
+        return loss_dict
 
     def forward_step(self, batch):
         inputs = self.prepare_forward_inputs(batch)
@@ -282,13 +295,15 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         return loss
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps: int = 50, cfg_scale: float = 0):
+    def eval_step(self, batch, global_step, num_inference_steps: int = 50, cfg_scale: float = 0) -> list:
         from tqdm import tqdm
 
         inputs = self.prepare_eval_inputs(batch, cfg_scale)
         xt = inputs["noise"]
         source = inputs["conditions"][0]
         mask = inputs["mask"]
+        mask4d = inputs["mask4d"]
+        edge4d = inputs["edge4d"]
 
         step = 0
         with self.scheduler.inference_sampler(xt, num_inference_steps, source, mask, xt.shape[1]) as sampler:
@@ -326,4 +341,4 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         output = QwenImageEditPlusPipeline._unpack_latents(xt, inputs["height"], inputs["width"], self.vae_scale_factor)
         output = self.decode_image(output)
-        return output
+        return [mask4d, edge4d, output]
