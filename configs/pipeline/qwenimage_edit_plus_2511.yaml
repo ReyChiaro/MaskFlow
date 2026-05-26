@@ -2,6 +2,7 @@ _target_: pipelines.QwenImageEditPlus
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
+cfg_dropout: 0.1
 
 # If null, the noise scheduler will be initialized with diffusers FlowMatchEulerDiscreteScheduler
 # else, use schedulers.flow_matching.RectifiedFlowMatchingScheduler
