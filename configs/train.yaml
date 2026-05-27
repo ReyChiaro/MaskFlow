@@ -1,6 +1,6 @@
 defaults:
-  - trainset: mask_edit_single
-  - evalset: mask_edit_single
+  - trainset: mask_edit
+  - evalset: mask_edit
   - optimizer: prodigy
   - pipeline: qwenimage_edit_plus_2511
   - project: train
