@@ -1,0 +1,9 @@
+_target_: data_module.MaskEditDataset
+
+image_root: ""
+data_file: "outputs/data_cache/train.jsonl"
+data_load_ratio: 1
+max_resolution: 1048576
+divisible_by: 16
+enable_prompt_truncation: true
+replace_prompt_placeholder_with: "the masked area in the image 2"
