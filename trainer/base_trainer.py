@@ -351,20 +351,20 @@ class BaseTrainer(_BaseTrainer):
                 loss_dict = self.pipe.forward_step(batch)
 
                 if isinstance(loss_dict, dict):
-                    loss = loss_dict["loss"]
+                    loss: torch.Tensor = loss_dict["loss"]
                 else:
-                    loss = loss_dict
+                    loss: torch.Tensor = loss_dict
 
                 loss = loss / self.gradient_accumulation_steps
                 loss.backward()
-
-                metrics["loss"] += loss.item()
 
                 if isinstance(loss_dict, dict):
                     for k, l in loss_dict.items():
                         if k not in metrics:
                             metrics[k] = 0
                         metrics[k] += l.item()
+                else:
+                    metrics["loss"] += loss.item()
 
                 if global_step % self.gradient_accumulation_steps != 0:
                     continue
@@ -386,6 +386,9 @@ class BaseTrainer(_BaseTrainer):
 
                 if dist.is_initialized():
                     dist.barrier()
+                
+                if global_step > self.max_training_steps:
+                    break
 
         dist.destroy_process_group()
         logger.info(f"🌊 Training Finished.")
