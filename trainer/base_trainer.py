@@ -15,6 +15,7 @@ from torchvision.utils import save_image
 from diffusers.optimization import get_scheduler
 from diffusers.utils.torch_utils import is_compiled_module
 
+from pathlib import Path
 from safetensors.torch import load_file, save_file
 from dataclasses import dataclass
 from typing import Literal
@@ -24,7 +25,9 @@ from loguru import logger
 
 from pipelines import BasePipeline
 from data_module import SchemaDataset
+from data_module.dataloader import get_dataloader
 from utils.summary import get_summary_table
+from utils.logger import setup_logger
 
 
 class _BaseTrainer:
@@ -91,6 +94,10 @@ class BaseTrainer(_BaseTrainer):
     evaluation_dir: str = "outputs/evaluations"
     log_dir: str = "outputs/logs"
     resume_from: str | None = None
+    model_state_dict_file: str = "transformer.safetensors"
+    optimizer_state_dict_file: str = "optimizer.pth"
+    data_sampler_state_dict_file: str = "data_sampler.pth"
+    training_state_dict_file: str = "train.pth"
 
     # Strategy
     max_grad_norm: float = 1.0
@@ -130,7 +137,7 @@ class BaseTrainer(_BaseTrainer):
 
         self.world_size = dist.get_world_size()
         self.global_rank = dist.get_rank()
-        self.local_rank = self.global_rank % torch.cuda.device_count()
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         self.device = torch.device(self.local_rank)
         self.is_main_process = self.global_rank == 0
         torch.cuda.set_device(self.device)
@@ -176,50 +183,6 @@ class BaseTrainer(_BaseTrainer):
         self.optimizer: Optimizer = instantiate(self.optimizer_configs, params=self.pipe.trainable_params)
         logger.info(f"Optimizer initialized.")
 
-    def _init_data_loader(self):
-        trainset: SchemaDataset = instantiate(self.train_data_configs)
-        self.train_loader = DataLoader(
-            dataset=trainset,
-            batch_size=self.batch_size_per_process,
-            num_workers=self.data_loader_workers,
-        )
-        logger.info(f"Train Dataloader initialized.")
-        self.eval_loader = None
-        if self.eval_data_configs is not None:
-            evalset: SchemaDataset = instantiate(self.eval_data_configs)
-            self.eval_loader = DataLoader(dataset=evalset, batch_size=1, num_workers=self.data_loader_workers)
-            logger.info(f"Eval Dataloader initialized.")
-
-    def init_everything(self):
-        r"""
-        Invoke the init handlers sequentially.
-        """
-        if self._initialized:
-            return
-        for handler in self.init_handlers:
-            handler()
-
-        if len(self.pipe.trainable_params) > 0:
-            for p in self.pipe.trainable_params:
-                p = p.to(self.device, self._train_dtype)
-
-            # self.pipe.transformer = DistributedDataParallel(
-            #     self.pipe.transformer,
-            #     device_ids=[self.local_rank],
-            #     find_unused_parameters=True,
-            # )
-
-        self.update_steps_per_epoch = math.ceil(
-            len(self.train_loader) / self.gradient_accumulation_steps / self.world_size
-        )
-        self.num_epochs = math.ceil(self.max_training_steps / self.update_steps_per_epoch)
-
-        if self.resume_from is not None and os.path.exists(self.resume_from):
-            self.load_checkpoints(self.resume_from)
-
-        if self.enable_gradient_checkpoint:
-            self.pipe.transformer.enable_gradient_checkpointing()
-
         self.lr_scheduler = None
         if self.lr_scheduler_configs is not None:
             self.lr_scheduler = get_scheduler(
@@ -232,7 +195,83 @@ class BaseTrainer(_BaseTrainer):
                 power=self.lr_scheduler_configs.power,
                 last_epoch=self.lr_scheduler_configs.last_epoch,
             )
+
+    def _init_data_loader(self):
+        trainset: SchemaDataset = instantiate(self.train_data_configs)
+        # self.train_loader = DataLoader(
+        #     dataset=trainset,
+        #     batch_size=self.batch_size_per_process,
+        #     num_workers=self.data_loader_workers,
+        # )
+        self.train_loader, self.train_sampler = get_dataloader(
+            trainset,
+            batch_size_per_process=self.batch_size_per_process,
+            num_workers=self.data_loader_workers,
+            num_replicas=self.world_size,
+            global_rank=self.global_rank,
+            global_seed=self.base_seed,
+            drop_last=False,
+            is_train=True,
+        )
+        logger.info(f"Train Dataloader and Sampler initialized.")
+        self.eval_loader = None
+        self.eval_sampler = None
+        if self.eval_data_configs is not None:
+            evalset: SchemaDataset = instantiate(self.eval_data_configs)
+            # self.eval_loader = DataLoader(dataset=evalset, batch_size=1, num_workers=self.data_loader_workers)
+            self.eval_loader, self.eval_sampler = get_dataloader(
+                evalset,
+                batch_size_per_process=self.batch_size_per_process,
+                num_workers=self.data_loader_workers,
+                num_replicas=self.world_size,
+                global_rank=self.global_rank,
+                global_seed=self.base_seed,
+                drop_last=False,
+                is_train=False,
+            )
+            logger.info(f"Eval Dataloader and Sampler initialized.")
+
+    def init_everything(self):
+        r"""
+        Invoke the init handlers sequentially.
+        """
+        if self._initialized:
+            return
+        for handler in self.init_handlers:
+            handler()
+
+        # Setup logger for every process
+        setup_logger(self.is_main_process, self.global_rank, self.log_dir, "log", log_per_rank=True)
+
+        self.update_steps_per_epoch = math.ceil(len(self.train_loader) / self.gradient_accumulation_steps)
+        self.epoch_start = 0
+        self.current_epoch = 0
+        self.num_epochs = math.ceil(self.max_training_steps / self.update_steps_per_epoch)
+
+        if self.resume_from is not None and os.path.exists(self.resume_from):
+            self.load_checkpoints(self.resume_from)
+
+        # TODO Wrap model into FSDP
+        if len(self.pipe.trainable_params) > 0:
+            for p in self.pipe.trainable_params:
+                p = p.to(self.device, self._train_dtype)
+
+            # self.pipe.transformer = DistributedDataParallel(
+            #     self.pipe.transformer,
+            #     device_ids=[self.local_rank],
+            #     find_unused_parameters=True,
+            # )
+
+        if self.enable_gradient_checkpoint:
+            self.pipe.transformer.enable_gradient_checkpointing()
+
         self._initialized = True
+
+    def train_state_dict(self) -> dict:
+        return {"epoch": self.current_epoch}
+
+    def load_train_state_dict(self, state_dict):
+        self.current_epoch = state_dict.get("epoch", 0)
 
     @staticmethod
     def unwrap_model(model: DistributedDataParallel | torch.nn.Module):
@@ -246,6 +285,22 @@ class BaseTrainer(_BaseTrainer):
             return
         if not (global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
             return
+
+        checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
+        checkpoint_dir.mkdir(exist_ok=True, parents=True)
+
+        # Train state
+        train_path = Path(checkpoint_dir) / self.training_state_dict_file
+        train_state = self.train_state_dict()
+        torch.save(train_state, train_path)
+
+        # Data sampler
+        if self.train_sampler is not None:
+            ds_path = Path(checkpoint_dir) / self.data_sampler_state_dict_file
+            ds_state = self.train_sampler.state_dict()
+            torch.save(ds_state, ds_path)
+
+        # TODO
         transformer = self.unwrap_model(self.pipe.transformer)
         states_to_save = {}
         for n, p in transformer.named_parameters():
@@ -256,6 +311,18 @@ class BaseTrainer(_BaseTrainer):
         logger.info(f"Checkpoints saved to {save_path}.")
 
     def load_checkpoints(self, checkpoint_path: str, **kwargs):
+        # Data sampler
+        if self.train_sampler is not None:
+            ds_path = Path(checkpoint_path) / self.data_sampler_state_dict_file
+            ds_state = torch.load(ds_path)
+            self.train_sampler.load_state_dict(ds_state)
+
+        # Train state
+        train_path = Path(checkpoint_path) / self.training_state_dict_file
+        train_state = torch.load(train_path)
+        self.load_train_state_dict(train_state)
+
+        # TODO
         states = load_file(checkpoint_path)
         self.pipe.transformer.load_state_dict(states)
         logger.info(f"Load checkpoints from {checkpoint_path}.")
@@ -274,25 +341,30 @@ class BaseTrainer(_BaseTrainer):
         metrics = {"loss": 0.0}
         align = len(str(self.max_training_steps))
         for epoch in range(self.num_epochs):
+            if self.train_sampler is not None:
+                self.train_sampler.set_epoch(epoch)
+            if self.eval_sampler is not None:
+                self.eval_sampler.set_epoch(epoch)
+
             for step, batch in enumerate(self.train_loader):
                 global_step += 1
                 loss_dict = self.pipe.forward_step(batch)
 
                 if isinstance(loss_dict, dict):
-                    loss = loss_dict["loss"]
+                    loss: torch.Tensor = loss_dict["loss"]
                 else:
-                    loss = loss_dict
+                    loss: torch.Tensor = loss_dict
 
                 loss = loss / self.gradient_accumulation_steps
                 loss.backward()
-
-                metrics["loss"] += loss.item()
 
                 if isinstance(loss_dict, dict):
                     for k, l in loss_dict.items():
                         if k not in metrics:
                             metrics[k] = 0
                         metrics[k] += l.item()
+                else:
+                    metrics["loss"] += loss.item()
 
                 if global_step % self.gradient_accumulation_steps != 0:
                     continue
@@ -312,7 +384,11 @@ class BaseTrainer(_BaseTrainer):
                 for k in metrics:
                     metrics[k] = 0.0
 
-                # dist.barrier()
+                if dist.is_initialized():
+                    dist.barrier()
+                
+                if global_step > self.max_training_steps:
+                    break
 
         dist.destroy_process_group()
         logger.info(f"🌊 Training Finished.")
