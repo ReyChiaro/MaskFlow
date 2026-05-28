@@ -84,6 +84,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             mask = self.blur_mask(mask)
             edge = self.blur_mask(edge)
 
+        mask_ratio = mask.sum() / (mask.shape[-2] * mask.shape[-1] * mask.shape[1])
+
         # To tensor and reshape to target areas
         h, w = target.shape[-2:]
         aspect = w / h
@@ -100,6 +102,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             "negative_prompt": negative_prompt,
             "mask": mask,
             "edge": edge,
+            "mask_ratio": mask_ratio,
             "conditions_vlm": conditions_vlm,
             "conditions_dit": conditions_dit,
             "target": target,
@@ -122,14 +125,14 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         image_shapes = []
         conditions_dit = processed_data["conditions_dit"]
         target = processed_data["target"]
-        mask = processed_data["mask"]
-        edge = processed_data["edge"]
+        mask_image = processed_data["mask"]
+        edge_image = processed_data["edge"]
 
         # ---------------- Encode and Pack ---------------- #
         # Encode
         tgt = self.encode_image(target, sample_mode)
-        mask = self.encode_mask(mask)
-        edge = self.encode_mask(edge)
+        mask_latents = self.encode_mask(mask_image)
+        edge_latents = self.encode_mask(edge_image)
         conds = [self.encode_image(c, sample_mode) for c in conditions_dit]
         image_shapes.append((1, tgt.shape[-2] // self.pacth_size, tgt.shape[-1] // self.pacth_size))
         image_shapes.extend([(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in conds])
@@ -140,19 +143,19 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         cond_latents = [
             QwenImageEditPlusPipeline._pack_latents(c, c.shape[0], c.shape[1], c.shape[-2], c.shape[-1]) for c in conds
         ]
-        mask = QwenImageEditPlusPipeline._pack_latents(
-            mask, mask.shape[0], mask.shape[1], mask.shape[-2], mask.shape[-1]
+        mask_latents = QwenImageEditPlusPipeline._pack_latents(
+            mask_latents, mask_latents.shape[0], mask_latents.shape[1], mask_latents.shape[-2], mask_latents.shape[-1]
         )
-        edge = QwenImageEditPlusPipeline._pack_latents(
-            edge, edge.shape[0], edge.shape[1], edge.shape[-2], edge.shape[-1]
+        edge_latents = QwenImageEditPlusPipeline._pack_latents(
+            edge_latents, edge_latents.shape[0], edge_latents.shape[1], edge_latents.shape[-2], edge_latents.shape[-1]
         )
         source = cond_latents[0]
 
         # --------------- Sample and Add Noise -------------- #
         noise = torch.randn_like(x0, generator=self.generator)
         ts = self.scheduler.sample_timesteps(x0.shape[0], self.generator, self.device)
-        xt, sigmas = self.scheduler.add_noise(noise, x0, ts, source, mask)
-        gt = self.scheduler.get_velocity(noise, x0, source, mask)
+        xt, sigmas = self.scheduler.add_noise(noise, x0, ts, source, mask_latents)
+        gt = self.scheduler.get_velocity(noise, x0, source, mask_latents)
 
         return {
             "height": target.shape[-2],
@@ -161,8 +164,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             "sigmas": sigmas,
             "noise": noise,
             "gt": gt,
-            "mask": mask,
-            "edge": edge,
+            "mask_image": mask_image,
+            "edge_image": edge_image,
+            "mask_latents": mask_latents,
+            "edge_latents": edge_latents,
+            "mask_ratio": processed_data["mask_ratio"],
             "prompt_embeds": prompt_embeds,
             "prompt_embeds_mask": prompt_embeds_mask,
             "xt": xt,
@@ -192,10 +198,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         image_shapes = []
         conditions_dit = processed_data["conditions_dit"]
         target = processed_data["target"]
-        mask = processed_data["mask"]
-        edge = processed_data["edge"]
-        mask4d = copy.deepcopy(mask)
-        edge4d = copy.deepcopy(edge)
+        mask_image = processed_data["mask"]
+        edge_image = processed_data["edge"]
 
         # ---------------- Encode and Pack ---------------- #
         # Encode
@@ -207,8 +211,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             target.shape[-1] // self.vae_scale_factor,
         )
         noise = torch.randn(noise_shape, generator=self.generator, device=self.device, dtype=self.dtype)
-        mask = self.encode_mask(mask)
-        edge = self.encode_mask(edge)
+        mask_latents = self.encode_mask(mask_image)
+        edge_latents = self.encode_mask(edge_image)
         conds = [self.encode_image(c, sample_mode) for c in conditions_dit]
         image_shapes.append((1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size))
         image_shapes.extend([(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in conds])
@@ -221,21 +225,21 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         cond_latents = [
             QwenImageEditPlusPipeline._pack_latents(c, c.shape[0], c.shape[1], c.shape[-2], c.shape[-1]) for c in conds
         ]
-        mask = QwenImageEditPlusPipeline._pack_latents(
-            mask, mask.shape[0], mask.shape[1], mask.shape[-2], mask.shape[-1]
+        mask_latents = QwenImageEditPlusPipeline._pack_latents(
+            mask_latents, mask_latents.shape[0], mask_latents.shape[1], mask_latents.shape[-2], mask_latents.shape[-1]
         )
-        edge = QwenImageEditPlusPipeline._pack_latents(
-            edge, edge.shape[0], edge.shape[1], edge.shape[-2], edge.shape[-1]
+        edge_latents = QwenImageEditPlusPipeline._pack_latents(
+            edge_latents, edge_latents.shape[0], edge_latents.shape[1], edge_latents.shape[-2], edge_latents.shape[-1]
         )
 
         return {
             "height": target.shape[-2],
             "width": target.shape[-1],
             "noise": noise,
-            "mask": mask,
-            "edge": edge,
-            "mask4d": mask4d,
-            "edge4d": edge4d,
+            "mask_latents": mask_latents,
+            "edge_latents": edge_latents,
+            "mask_image": mask_image,
+            "edge_image": edge_image,
             "target": processed_data["raw"]["target"].to(self.device, dtype=self.dtype),
             "prompt_embeds": prompt_embeds,
             "prompt_embeds_mask": prompt_embeds_mask,
@@ -249,30 +253,32 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         self,
         predictions: torch.Tensor,
         ground_truths: torch.Tensor,
-        mask: torch.Tensor | None = None,
-        edge: torch.Tensor | None = None,
+        mask_ratio: torch.Tensor | None = None,
+        mask_latents: torch.Tensor | None = None,
+        edge_latents: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        r"""Compute loss without masks and weights"""
+        r"""
+        Compute loss without masks and weights
+        TODO fix mask weighted loss: current mask is VAE encoded, maybe will replaced by a binary mask.
+        """
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         loss_dict = {"loss": 0}
 
-        if mask is not None:
-            mask_field = mask * loss_field
-
+        if mask_ratio is not None:
+            mask_field = mask_latents * loss_field
             if self.mask_loss_weight > 0:
-                total_area = mask.shape[1]
-                mask_area = mask.sum()
-                mask_field = self.mask_loss_weight * (mask_area / total_area) * mask_field
+                mask_field = self.mask_loss_weight * (1.0 / (mask_ratio + 1e-6)) * mask_field
 
             mask_loss = (mask_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
             loss_dict["mask_loss"] = mask_loss
             loss_dict["loss"] = loss_dict["loss"] + mask_loss
 
-        if edge is not None and self.edge_loss_weight > 0:
-            edge_field = self.edge_loss_weight * edge * loss_field
-            edge_loss = (edge_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
-            loss_dict["edge_loss"] = edge_loss
-            loss_dict["loss"] = loss_dict["loss"] + edge_loss
+        if edge_latents is not None and self.edge_loss_weight > 0:
+            # edge_field = self.edge_loss_weight * edge * loss_field
+            # edge_loss = (edge_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+            # loss_dict["edge_loss"] = edge_loss
+            # loss_dict["loss"] = loss_dict["loss"] + edge_loss
+            pass
 
         if loss_dict["loss"] == 0:
             loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
@@ -291,7 +297,13 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             inputs["image_shapes"],
             inputs["xt"].shape[1],
         )
-        loss = self.compute_loss(predictions, inputs["gt"], mask=inputs["mask"], edge=inputs["edge"])
+        loss = self.compute_loss(
+            predictions,
+            inputs["gt"],
+            mask_ratio=inputs["mask_ratio"],
+            mask_latents=inputs["mask_latents"],
+            edge_latents=inputs["edge_latents"],
+        )
         return loss
 
     @torch.inference_mode()
@@ -301,9 +313,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         inputs = self.prepare_eval_inputs(batch, cfg_scale)
         xt = inputs["noise"]
         source = inputs["conditions"][0]
-        mask = inputs["mask"]
-        mask4d = inputs["mask4d"]
-        edge4d = inputs["edge4d"]
+        mask = inputs["mask_latents"]
+        mask_image = inputs["mask_image"]
+        edge_image = inputs["edge_image"]
 
         step = 0
         with self.scheduler.inference_sampler(xt, num_inference_steps, source, mask, xt.shape[1]) as sampler:
@@ -341,4 +353,4 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         output = QwenImageEditPlusPipeline._unpack_latents(xt, inputs["height"], inputs["width"], self.vae_scale_factor)
         output = self.decode_image(output)
-        return [mask4d, edge4d, output]
+        return [mask_image, edge_image, output]
