@@ -1,0 +1,12 @@
+defaults:
+  - pipeline: qwenimage_mask_flow
+  - adapter: lora
+  - _self_
+
+
+timestamp: ${now:%Y%m%d-%H%M%S}
+
+
+hydra:
+  run:
+    dir: outputs/inference/${timestamp}/hydra-configs
