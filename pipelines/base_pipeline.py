@@ -2,6 +2,7 @@ import torch
 import dataclasses
 
 from diffusers.models.modeling_utils import ModelMixin
+from diffusers.loaders.peft import PeftAdapterMixin
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from PIL import Image
@@ -14,7 +15,7 @@ class BasePipeline:
 
     vae: ModelMixin = dataclasses.field(init=None)
     text_pipeline: DiffusionPipeline = dataclasses.field(init=None)
-    transformer: ModelMixin = dataclasses.field(init=None)
+    transformer: ModelMixin | PeftAdapterMixin = dataclasses.field(init=None)
     scheduler: SchedulerMixin = dataclasses.field(init=None)
 
     @property
@@ -37,5 +38,5 @@ class BasePipeline:
         pass
 
     @torch.inference_mode()
-    def generate(self, prompt: str, images: list[Image.Image], **kwargs):
+    def generate(self, prompt: str, image: Image.Image | list[Image.Image] | None = None, **kwargs):
         pass
