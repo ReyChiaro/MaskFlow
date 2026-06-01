@@ -97,7 +97,7 @@ class BaseTrainer(_BaseTrainer):
     model_state_dict_file: str = "transformer.safetensors"
     optimizer_state_dict_file: str = "optimizer.pth"
     data_sampler_state_dict_file: str = "data_sampler.pth"
-    training_state_dict_file: str = "train.pth"
+    training_state_dict_file: str = "train_state.pth"
 
     # Strategy
     max_grad_norm: float = 1.0
@@ -281,6 +281,11 @@ class BaseTrainer(_BaseTrainer):
         return model
 
     def save_checkpoints(self, global_step: int):
+        r"""
+        - Training states
+        - Data sampler
+        - Model: checkpoints of *trainable* parameters of trasnformer by default.
+        """
         if not self.is_main_process:
             return
         if not (global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
@@ -300,15 +305,14 @@ class BaseTrainer(_BaseTrainer):
             ds_state = self.train_sampler.state_dict()
             torch.save(ds_state, ds_path)
 
-        # TODO
         transformer = self.unwrap_model(self.pipe.transformer)
         states_to_save = {}
         for n, p in transformer.named_parameters():
             if p.requires_grad:
                 states_to_save[n] = p
-        save_path = os.path.join(self.checkpoint_dir, f"checkpoints-{global_step}.safetensors")
+        save_path = os.path.join(checkpoint_dir, self.model_state_dict_file)
         save_file(states_to_save, save_path)
-        logger.info(f"Checkpoints saved to {save_path}.")
+        logger.info(f"Checkpoints saved to {checkpoint_dir}.")
 
     def load_checkpoints(self, checkpoint_path: str, **kwargs):
         # Data sampler

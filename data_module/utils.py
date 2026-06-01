@@ -1,8 +1,51 @@
 import os
 import json
+import math
+import torch
+import torchvision.transforms.functional as T
+
 from loguru import logger
 
 ASPECT_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"]
+MAX_RESOLUTION = 1024 * 1024
+MAX_CONDITION_RESOLUTION = 384 * 384
+DIVISIBLE_BY = 16
+
+
+def nearest_aspect_ratio(image: torch.Tensor, aspect_ratios: list[str] = ASPECT_RATIOS) -> str:
+    return min(
+        aspect_ratios,
+        key=lambda x: abs(image.shape[-1] / image.shape[-2] - int(x.split(":")[0]) / int(x.split(":")[1])),
+    )
+
+
+def crop_image_to_aspect_ratio(
+    image: torch.Tensor,
+    aspect_ratios: list[str] = ASPECT_RATIOS,
+) -> tuple[torch.Tensor, tuple[int]]:
+    # ---------------- Reshape to aspect ---------------- #
+    aspect = nearest_aspect_ratio(image, aspect_ratios)
+    aspect_ratio = int(aspect.split(":")[0]) / int(aspect.split(":")[1])
+    org_h, org_w = image.shape[-2:]
+    org_aspect = org_w / org_h
+    h, w = (org_h, int(org_h * aspect_ratio)) if org_aspect > aspect_ratio else (int(org_w / aspect_ratio), org_w)
+    image = T.center_crop(image, [h, w])
+    return image, aspect_ratio
+
+
+def reshape_to_divisible_max_resolution(
+    image: torch.Tensor,
+    aspect_ratio: float | None = None,
+    max_resolution: int = MAX_RESOLUTION,
+):
+    aspect_ratio = aspect_ratio or image.shape[-1] / image.shape[-2]
+    # ------------- Reshape to max resolution ------------- #
+    max_h = int(math.sqrt(max_resolution / aspect_ratio))
+    max_w = int(math.sqrt(max_resolution * aspect_ratio))
+    max_h = max_h // DIVISIBLE_BY * DIVISIBLE_BY
+    max_w = max_w // DIVISIBLE_BY * DIVISIBLE_BY
+    image = T.resize(image, [max_h, max_w])
+    return image
 
 
 def is_bucketed_dataset(data_file: str, sample_size: int = 1):
