@@ -1,9 +1,7 @@
 import copy
-import math
 import torch
 import random
 import torch.nn.functional as F
-import torchvision.transforms.functional as T
 
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
     QwenImageEditPlusPipeline,
@@ -46,6 +44,7 @@ class QwenImageEditPlus(BasePipeline):
     text_pipeline: QwenImageEditPlusPipeline = field(init=False, default=None)
 
     def __post_init__(self):
+        # TODO: Initialize FSDP module
         self.vae = (
             AutoencoderKLQwenImage.from_pretrained(self.pretrained_model, subfolder="vae", torch_dtype=self.dtype)
             .to(self.device)
@@ -63,6 +62,8 @@ class QwenImageEditPlus(BasePipeline):
         ).to(self.device)
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.image_processor = self.text_pipeline.image_processor
+
+        self.setup_fsdp_modules()
 
     @property
     def trainable_params(self) -> list[torch.Tensor]:

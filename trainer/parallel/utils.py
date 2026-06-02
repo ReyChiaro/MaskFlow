@@ -48,3 +48,12 @@ def get_nnodes() -> int:
 @parallel_check
 def is_main_process() -> bool:
     return torch.distributed.get_rank() == 0
+
+
+def is_distributed_usable() -> bool:
+    return torch.distributed.is_available() and torch.distributed.is_initialized()
+
+
+def wait_for_everyone():
+    if is_distributed_usable():
+        torch.distributed.barrier()

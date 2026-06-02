@@ -4,6 +4,20 @@ _recursive_: true
 pretrained_model: Qwen/Qwen-Image-Edit-2511
 cfg_dropout: 0.1
 
+fsdp_configs:
+  transformer:
+    iterable: false # whether apply fsdp args for every submodule
+    reshard_after_forward: false
+  transformer.transformer_blocks:
+    iterable: true
+    reshard_after_forward: true
+  text_pipeline.text_encoder.model.visual.blocks:
+    iterable: true
+    reshard_after_forward: true
+  text_pipeline.text_encoder.model.language_model.layers:
+    iterable: true
+    reshard_after_forward: true
+
 # If null, the noise scheduler will be initialized with diffusers FlowMatchEulerDiscreteScheduler
 # else, use schedulers.flow_matching.RectifiedFlowMatchingScheduler
 scheduler:

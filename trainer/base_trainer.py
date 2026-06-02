@@ -6,10 +6,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
+import torch.distributed.checkpoint.state_dict_saver as DCPSaver
+import torch.distributed.checkpoint.state_dict_loader as DCPLoader
+from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 from torchvision.utils import save_image
 
 from diffusers.optimization import get_scheduler
@@ -29,56 +30,13 @@ from data_module.dataloader import get_dataloader
 from utils.summary import get_summary_table
 from utils.logger import setup_logger
 
-
-class _BaseTrainer:
-
-    def __init__(self):
-        pass
-
-    def _init_context(self):
-        pass
-
-    def _init_project(self):
-        pass
-
-    def _init_pipeline(self):
-        pass
-
-    def _init_trainable(self):
-        r"""
-        Initialize trainable parameters in the pipeline
-        or add trainable adapters on it.
-        """
-        pass
-
-    def _init_optimizer(self):
-        pass
-
-    def _init_lr_scheduler(self):
-        pass
-
-    def _init_data_loader(self):
-        pass
-
-    def init_everything(self):
-        r"""
-        Invoke the init handlers sequentially.
-        """
-        pass
-
-    def train(self):
-        r"""
-        Train pipeline.
-        """
-        pass
-
-    @torch.inference_mode()
-    def evaluate(self, global_step: int):
-        pass
+from trainer.parallel.fsdp_strategy import FSDPStrategy
+from trainer.parallel.handler import parallel_handler
+from trainer.parallel.utils import is_main_process, wait_for_everyone
 
 
 @dataclass
-class BaseTrainer(_BaseTrainer):
+class BaseTrainer:
 
     # Modules
     pipe_configs: OmegaConf | None = None
@@ -89,11 +47,13 @@ class BaseTrainer(_BaseTrainer):
 
     # Project
     base_seed: int = 42
+    resume_from: str | None = None
+    enable_save_optimizer: bool = True
+
     output_dir: str = "outputs"
     checkpoint_dir: str = "outputs/checkpoints"
     evaluation_dir: str = "outputs/evaluations"
     log_dir: str = "outputs/logs"
-    resume_from: str | None = None
     model_state_dict_file: str = "transformer.safetensors"
     optimizer_state_dict_file: str = "optimizer.pth"
     data_sampler_state_dict_file: str = "data_sampler.pth"
@@ -109,6 +69,10 @@ class BaseTrainer(_BaseTrainer):
     gradient_accumulation_steps: int = 1
     cudnn_deterministic: bool = False
     cudnn_benchmark: bool = True
+
+    # Parallel
+    fsdp_strategy: FSDPStrategy = FSDPStrategy.NO_SHARD
+    sp_size: int = 1
 
     # Data
     batch_size_per_process: int = 1
@@ -132,16 +96,20 @@ class BaseTrainer(_BaseTrainer):
         self._summary_table = {}
 
     def _init_context(self):
-        # TODO: DDP implementation
+        # Init FSDP if required
         dist.init_process_group("nccl")
+        parallel_handler.setup_parallel(self.sp_size)
 
+        # Init FSDP attributes
         self.world_size = dist.get_world_size()
         self.global_rank = dist.get_rank()
-        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        self.device = torch.device(self.local_rank)
-        self.is_main_process = self.global_rank == 0
+        self.device = torch.device(self.global_rank % torch.cuda.device_count())
+        self.is_main_process = is_main_process()
         torch.cuda.set_device(self.device)
 
+        self.dp_rank = parallel_handler.dp_rank
+
+        # Init random states
         self.random_seed = self.global_rank + self.base_seed
         self.generator = torch.Generator(self.device).manual_seed(self.random_seed)
         random.seed(self.random_seed)
@@ -198,11 +166,6 @@ class BaseTrainer(_BaseTrainer):
 
     def _init_data_loader(self):
         trainset: SchemaDataset = instantiate(self.train_data_configs)
-        # self.train_loader = DataLoader(
-        #     dataset=trainset,
-        #     batch_size=self.batch_size_per_process,
-        #     num_workers=self.data_loader_workers,
-        # )
         self.train_loader, self.train_sampler = get_dataloader(
             trainset,
             batch_size_per_process=self.batch_size_per_process,
@@ -218,7 +181,6 @@ class BaseTrainer(_BaseTrainer):
         self.eval_sampler = None
         if self.eval_data_configs is not None:
             evalset: SchemaDataset = instantiate(self.eval_data_configs)
-            # self.eval_loader = DataLoader(dataset=evalset, batch_size=1, num_workers=self.data_loader_workers)
             self.eval_loader, self.eval_sampler = get_dataloader(
                 evalset,
                 batch_size_per_process=self.batch_size_per_process,
@@ -233,7 +195,7 @@ class BaseTrainer(_BaseTrainer):
 
     def init_everything(self):
         r"""
-        Invoke the init handlers sequentially.
+        Invoke the init handlers sequentially and initialize the training states.
         """
         if self._initialized:
             return
@@ -243,24 +205,26 @@ class BaseTrainer(_BaseTrainer):
         # Setup logger for every process
         setup_logger(self.is_main_process, self.global_rank, self.log_dir, "log", log_per_rank=True)
 
+        # Define the update steps, accumulation steps during training
         self.update_steps_per_epoch = math.ceil(len(self.train_loader) / self.gradient_accumulation_steps)
         self.epoch_start = 0
         self.current_epoch = 0
         self.num_epochs = math.ceil(self.max_training_steps / self.update_steps_per_epoch)
 
+        # TODO Wrap model into FSDP, load checkpoints to recover training
+        if self.fsdp_strategy == FSDPStrategy.NO_SHARD:
+            # Data parallel, no model shard
+            pass
+        elif self.fsdp_strategy == FSDPStrategy.FULL_SHARD:
+            # Data parallel, model shard
+            pass
+
         if self.resume_from is not None and os.path.exists(self.resume_from):
             self.load_checkpoints(self.resume_from)
 
-        # TODO Wrap model into FSDP
         if len(self.pipe.trainable_params) > 0:
             for p in self.pipe.trainable_params:
                 p = p.to(self.device, self._train_dtype)
-
-            # self.pipe.transformer = DistributedDataParallel(
-            #     self.pipe.transformer,
-            #     device_ids=[self.local_rank],
-            #     find_unused_parameters=True,
-            # )
 
         if self.enable_gradient_checkpoint:
             self.pipe.transformer.enable_gradient_checkpointing()
@@ -280,15 +244,33 @@ class BaseTrainer(_BaseTrainer):
         model = model._orig_mod if is_compiled_module(model) else model
         return model
 
+    def get_model_checkpoints_to_save(self) -> dict[str, torch.Tensor]:
+        r"""
+        Can be overriden if difference saving strategy is required,
+        only parameters with gradients will be saved by default.
+        """
+        transformer = self.unwrap_model(self.pipe.transformer)
+        states_to_save = {}
+        for n, p in transformer.named_parameters():
+            if p.requires_grad:
+                states_to_save[n] = p.detach().cpu()
+        return states_to_save
+
+    def load_model_checkpoints_to_recover(self, model_states: dict[str, torch.Tensor]) -> tuple[list[str]]:
+        transformer = self.unwrap_model(self.pipe.transformer)
+        missing, unexpected = transformer.load_state_dict(model_states, strict=False)
+        return missing, unexpected
+
     def save_checkpoints(self, global_step: int):
         r"""
         - Training states
         - Data sampler
         - Model: checkpoints of *trainable* parameters of trasnformer by default.
         """
-        if not self.is_main_process:
-            return
         if not (global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
+            return
+        if not self.is_main_process:
+            wait_for_everyone()
             return
 
         checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
@@ -305,31 +287,61 @@ class BaseTrainer(_BaseTrainer):
             ds_state = self.train_sampler.state_dict()
             torch.save(ds_state, ds_path)
 
-        transformer = self.unwrap_model(self.pipe.transformer)
-        states_to_save = {}
-        for n, p in transformer.named_parameters():
-            if p.requires_grad:
-                states_to_save[n] = p
-        save_path = os.path.join(checkpoint_dir, self.model_state_dict_file)
-        save_file(states_to_save, save_path)
+        # Model
+        states_to_save = self.get_model_checkpoints_to_save()
+        model_path = os.path.join(checkpoint_dir, self.model_state_dict_file)
+        save_file(states_to_save, model_path)
+
+        # Optimizer
+        if self.enable_save_optimizer:
+            opt_path = checkpoint_dir / self.optimizer_state_dict_file
+            opt_state = self.optimizer.state_dict()
+            torch.save(opt_state, opt_path)
+
         logger.info(f"Checkpoints saved to {checkpoint_dir}.")
+        wait_for_everyone()
 
     def load_checkpoints(self, checkpoint_path: str, **kwargs):
+        checkpoint_dir = Path(checkpoint_path)
+        loaded_components = []
+
+        wait_for_everyone()
+
         # Data sampler
-        if self.train_sampler is not None:
-            ds_path = Path(checkpoint_path) / self.data_sampler_state_dict_file
+        ds_path = checkpoint_dir / self.data_sampler_state_dict_file
+        if self.train_sampler is not None and ds_path.exists():
             ds_state = torch.load(ds_path)
             self.train_sampler.load_state_dict(ds_state)
+            loaded_components.append("data_sampler")
 
         # Train state
-        train_path = Path(checkpoint_path) / self.training_state_dict_file
-        train_state = torch.load(train_path)
-        self.load_train_state_dict(train_state)
+        train_path = checkpoint_dir / self.training_state_dict_file
+        if train_path.exists():
+            train_state = torch.load(train_path)
+            self.load_train_state_dict(train_state)
+            loaded_components.append("train_state")
 
-        # TODO
-        states = load_file(checkpoint_path)
-        self.pipe.transformer.load_state_dict(states)
-        logger.info(f"Load checkpoints from {checkpoint_path}.")
+        # Model
+        model_path = checkpoint_dir / self.model_state_dict_file
+        missing = unexpected = []
+        if model_path.exists():
+            model_states = load_file(checkpoint_path)
+            missing, unexpected = self.load_model_checkpoints_to_recover(model_states)
+            loaded_components.append("model")
+
+        # Optimizer
+        opt_path = checkpoint_dir / self.optimizer_state_dict_file
+        if opt_path.exists():
+            opt_states = torch.load(opt_path)
+            self.optimizer.load_state_dict(opt_states)
+            loaded_components.append("optimizer")
+
+        logger.info(
+            f"\nLoad checkpoints from {checkpoint_path}."
+            + f"\nSuccessfully load: {','.join(loaded_components)}."
+            + f"\nModel keys: missing: {len(missing)}, unexpected: {len(unexpected)}."
+        )
+        wait_for_everyone()
 
     def train(self):
         r"""
@@ -344,7 +356,7 @@ class BaseTrainer(_BaseTrainer):
         global_step = 0
         metrics = {"loss": 0.0}
         align = len(str(self.max_training_steps))
-        for epoch in range(self.num_epochs):
+        for epoch in range(self.current_epoch, self.num_epochs):
             if self.train_sampler is not None:
                 self.train_sampler.set_epoch(epoch)
             if self.eval_sampler is not None:
@@ -396,7 +408,7 @@ class BaseTrainer(_BaseTrainer):
 
                 if dist.is_initialized():
                     dist.barrier()
-                
+
                 if global_step > self.max_training_steps:
                     break
 
