@@ -1,0 +1,18 @@
+import functools
+import threading
+
+
+def singleton(cls):
+
+    instances = {}
+    lock = threading.Lock()
+
+    @functools.wraps(cls)
+    def wrapper(*args, **kwargs):
+        if cls not in instances:
+            with lock:
+                if cls not in instances:
+                    instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+
+    return wrapper

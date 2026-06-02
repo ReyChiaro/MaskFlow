@@ -1,16 +1,10 @@
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
-from enum import StrEnum
 from dataclasses import dataclass
 
-from trainer.parallel.utils import get_world_size, get_nnodes
+from trainer.parallel.utils import get_world_size
 from utils.singleton import singleton
-
-
-class FSDPStrategy(StrEnum):
-
-    NO_SHARD = "no_shard"
 
 
 @dataclass
