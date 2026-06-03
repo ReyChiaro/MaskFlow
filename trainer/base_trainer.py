@@ -70,9 +70,9 @@ class BaseTrainer:
     cudnn_deterministic: bool = False
     cudnn_benchmark: bool = True
 
-    # Parallel
+    # Data Parallel
     fsdp_strategy: FSDPStrategy = FSDPStrategy.NO_SHARD
-    sp_size: int = 1
+    # TODO SP if required
 
     # Data
     batch_size_per_process: int = 1
@@ -83,11 +83,17 @@ class BaseTrainer:
     cfg_scale: float = 0
 
     def __post_init__(self):
+        r"""
+        Initialize init_handlers
+        NOTE: The sequence init_pipeline->init_trainable->init_parallel_modules->init_optimizer
+            *cannot* be disrupted.
+        """
         self.init_handlers = [
             self._init_context,
             self._init_project,
             self._init_pipeline,
             self._init_trainable,
+            self._init_parallel_modules,  # Must be called after init_trainable
             self._init_optimizer,
             self._init_lr_scheduler,
             self._init_data_loader,
@@ -98,7 +104,7 @@ class BaseTrainer:
     def _init_context(self):
         # Init FSDP if required
         dist.init_process_group("nccl")
-        parallel_handler.setup_parallel(self.sp_size)
+        parallel_handler.setup_parallel()
 
         # Init FSDP attributes
         self.world_size = dist.get_world_size()
@@ -146,6 +152,28 @@ class BaseTrainer:
         or add trainable adapters on it.
         """
         pass
+
+    def _init_parallel_modules(self):
+        r""" """
+        if FSDPStrategy.is_no_shard(self.fsdp_strategy):
+            self.pipe.setup_fsdp_modules(
+                fsdp_strategy=FSDPStrategy.NO_SHARD,
+                device=self.device,
+                dtype=self._train_dtype,
+            )
+        
+        elif FSDPStrategy.is_full_shard(self.fsdp_strategy):
+            self.pipe.setup_fsdp_modules(
+                fsdp_strategy=FSDPStrategy.FULL_SHARD,
+                device=self.device,
+                dtype=self._train_dtype,
+            )
+        
+        else:
+            logger.warning(f"Unsupported FSDPStrategy: {self.fsdp_strategy}.")
+        
+        if self.enable_gradient_checkpoint:
+            self.unwrap_model(self.pipe.transformer).enable_gradient_checkpointing()
 
     def _init_optimizer(self):
         self.optimizer: Optimizer = instantiate(self.optimizer_configs, params=self.pipe.trainable_params)
@@ -210,24 +238,10 @@ class BaseTrainer:
         self.epoch_start = 0
         self.current_epoch = 0
         self.num_epochs = math.ceil(self.max_training_steps / self.update_steps_per_epoch)
-
-        # TODO Wrap model into FSDP, load checkpoints to recover training
-        if self.fsdp_strategy == FSDPStrategy.NO_SHARD:
-            # Data parallel, no model shard
-            pass
-        elif self.fsdp_strategy == FSDPStrategy.FULL_SHARD:
-            # Data parallel, model shard
-            pass
-
+        
+        # TODO: FSDP checkpoints
         if self.resume_from is not None and os.path.exists(self.resume_from):
             self.load_checkpoints(self.resume_from)
-
-        if len(self.pipe.trainable_params) > 0:
-            for p in self.pipe.trainable_params:
-                p = p.to(self.device, self._train_dtype)
-
-        if self.enable_gradient_checkpoint:
-            self.pipe.transformer.enable_gradient_checkpointing()
 
         self._initialized = True
 
