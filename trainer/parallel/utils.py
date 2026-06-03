@@ -6,7 +6,7 @@ from loguru import logger
 from typing import Callable, Any
 
 
-def parallel_check(required_env: str, default_value: Any | None = None) -> Any:
+def parallel_check(required_env: str | None = None, default_value: Any | None = None) -> Any:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> Any:
@@ -15,10 +15,10 @@ def parallel_check(required_env: str, default_value: Any | None = None) -> Any:
             if not torch.cuda.is_available():
                 warnings.append("CUDA is not available.")
 
-            if not torch.distributed.is_initialized() or torch.distributed.is_available():
+            if not torch.distributed.is_initialized() or not torch.distributed.is_available():
                 warnings.append("Distributed not initialized or not available.")
 
-            if required_env not in os.environ:
+            if required_env is not None and required_env not in os.environ:
                 warnings.append(f"Environment variable not found: `{required_env}`. Use {default_value=} instead.")
 
             if warnings:
