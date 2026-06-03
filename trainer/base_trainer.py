@@ -99,7 +99,6 @@ class BaseTrainer:
             self._init_trainable,
             self._init_parallel_modules,  # Must be called after init_trainable
             self._init_optimizer,
-            self._init_lr_scheduler,
             self._init_data_loader,
         ]
         self._initialized = False
@@ -231,6 +230,7 @@ class BaseTrainer:
         """
         if self._initialized:
             return
+
         for handler in self.init_handlers:
             handler()
 
@@ -335,8 +335,8 @@ class BaseTrainer:
         if not (global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
             return
 
+        checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
         if self.is_main_process:
-            checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
             checkpoint_dir.mkdir(exist_ok=True, parents=True)
 
             # Train state
@@ -452,9 +452,6 @@ class BaseTrainer:
                 for k in metrics:
                     metrics[k] = 0.0
 
-                if dist.is_initialized():
-                    dist.barrier()
-
                 if global_step > self.max_training_steps:
                     break
 
@@ -463,40 +460,41 @@ class BaseTrainer:
 
     @torch.inference_mode()
     def evaluate(self, global_step: int):
-        if not self.is_main_process:
-            return
         if self.eval_loader is None:
             return
         if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
             return
-        save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
-        os.makedirs(save_dir, exist_ok=True)
-        logger.info(f"Evaluate start, save to {save_dir}.")
-        for step, batch in enumerate(self.eval_loader):
-            output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
 
-            if not isinstance(output, (tuple, list)):
-                output = [output]
+        if self.is_main_process:
+            save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
+            os.makedirs(save_dir, exist_ok=True)
+            logger.info(f"Evaluate start, save to {save_dir}.")
+            for step, batch in enumerate(self.eval_loader):
+                output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
 
-            conditions = batch["conditions"]
-            target = batch["target"]
-            image_name = batch["image_name"][0]
+                if not isinstance(output, (tuple, list)):
+                    output = [output]
 
-            # 4D
-            tensors = [*conditions, target, *output]
-            max_h = max([t.shape[-2] for t in tensors])
-            tensors = [t.squeeze(0) for t in tensors]
-            tensors = [
-                F.pad(
-                    input=t,
-                    pad=(0, 0, 0, max_h - t.shape[1]),
-                    mode="constant",
-                    value=0,
-                ).to(self.device, dtype=self._eval_dtype)
-                for t in tensors
-            ]
-            tensors = torch.cat(tensors, dim=-1)
-            save_path = os.path.join(save_dir, f"{image_name}.jpg")
-            save_image(tensors, save_path)
-            logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {image_name}")
-        logger.info(f"Evaluation finished, saved to {save_dir}.")
+                conditions = batch["conditions"]
+                target = batch["target"]
+                image_name = batch["image_name"][0]
+
+                # 4D
+                tensors = [*conditions, target, *output]
+                max_h = max([t.shape[-2] for t in tensors])
+                tensors = [t.squeeze(0) for t in tensors]
+                tensors = [
+                    F.pad(
+                        input=t,
+                        pad=(0, 0, 0, max_h - t.shape[1]),
+                        mode="constant",
+                        value=0,
+                    ).to(self.device, dtype=self._eval_dtype)
+                    for t in tensors
+                ]
+                tensors = torch.cat(tensors, dim=-1)
+                save_path = os.path.join(save_dir, f"{image_name}.jpg")
+                save_image(tensors, save_path)
+                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {image_name}")
+            logger.info(f"Evaluation finished, saved to {save_dir}.")
+        wait_for_everyone()

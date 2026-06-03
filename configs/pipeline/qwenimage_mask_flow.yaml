@@ -12,6 +12,28 @@ mask_edge_width: 90  # dilate 45, erode 45
 mask_loss_weight: 1.0
 edge_loss_weight: 0.0
 
+fsdp_configs:
+  transformer.transformer_blocks:
+    iterable: true
+    reshard_after_forward: true
+
+  text_pipeline.text_encoder.model.visual.blocks:
+    iterable: true
+    reshard_after_forward: true
+
+  text_pipeline.text_encoder.model.language_model.layers:
+    iterable: true
+    reshard_after_forward: true
+
+  # The root module are set at last
+  transformer:
+    iterable: false
+    reshard_after_forward: false
+
+  text_pipeline.text_encoder.model:
+    iterable: false
+    reshard_after_forward: false
+
 # If null, the noise scheduler will be initialized with diffusers FlowMatchEulerDiscreteScheduler
 # else, use schedulers.flow_matching.RectifiedFlowMatchingScheduler
 scheduler:

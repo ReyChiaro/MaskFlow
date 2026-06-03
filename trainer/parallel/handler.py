@@ -1,7 +1,7 @@
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from loguru import logger
 
 from trainer.parallel.utils import get_world_size
@@ -9,23 +9,23 @@ from trainer.parallel.fsdp_strategy import FSDPStrategy
 from utils.singleton import singleton
 
 
-@dataclass
 @singleton
+@dataclass
 class ParallelHandler:
     r"""
     Data Parallel handler.
     """
 
-    global_mesh: DeviceMesh
-    global_rank: int
-    global_size: int
+    global_mesh: DeviceMesh = field(init=False, default=None)
+    global_rank: int = field(init=False, default=None)
+    global_size: int = field(init=False, default=None)
 
-    dp_mesh: DeviceMesh
-    dp_group: dist.ProcessGroup
-    dp_size: int
-    dp_rank: int
+    dp_mesh: DeviceMesh = field(init=False, default=None)
+    dp_group: dist.ProcessGroup = field(init=False, default=None)
+    dp_size: int = field(init=False, default=None)
+    dp_rank: int = field(init=False, default=None)
 
-    no_shard_mesh: DeviceMesh
+    no_shard_mesh: DeviceMesh = field(init=None)
 
     def setup_parallel(self):
         if not dist.is_initialized():

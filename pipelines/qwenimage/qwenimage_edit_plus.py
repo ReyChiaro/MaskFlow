@@ -31,11 +31,11 @@ from data_module.utils import (
 @dataclass
 class QwenImageEditPlus(BasePipeline):
 
-    pretrained_model: str
-    scheduler: RectifiedFlowMatchingScheduler
-    generator: torch.Generator
-    device: torch.device
-    dtype: torch.dtype
+    pretrained_model: str | None = None
+    scheduler: RectifiedFlowMatchingScheduler | None = None
+    generator: torch.Generator | None = None
+    device: torch.device | None = None
+    dtype: torch.dtype | None = None
 
     cfg_dropout: float | None = None
 

@@ -32,7 +32,7 @@ from data_module.utils import (
 @dataclasses.dataclass
 class QwenImageMaskFlow(QwenImageEditPlus):
 
-    scheduler: MaskFlowScheduler
+    scheduler: MaskFlowScheduler | None = None
 
     mask_dilation_kernel: int = 45
     mask_blur_kernel: int = 45
@@ -279,10 +279,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         loss_dict = {"loss": 0}
 
-        if mask_ratio is not None:
+        if mask_latents is not None:
             mask_field = mask_latents * loss_field
-            if self.mask_loss_weight > 0:
+            if mask_ratio is not None and self.mask_loss_weight > 0:
                 mask_field = self.mask_loss_weight * (1.0 / (mask_ratio + 1e-6)) * mask_field
+                loss_dict["mask_ratio"] = mask_ratio
 
             mask_loss = (mask_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
             loss_dict["mask_loss"] = mask_loss
