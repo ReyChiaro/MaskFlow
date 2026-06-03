@@ -27,7 +27,7 @@ def get_dataloader(
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=batch_size_per_process,
-        shuffle=(sampler is None or is_train),
+        shuffle=(sampler is None and is_train),
         num_workers=num_workers,
         drop_last=drop_last,
         sampler=sampler,

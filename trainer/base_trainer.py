@@ -6,9 +6,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.distributed as dist
-import torch.distributed.checkpoint.state_dict_saver as DCPSaver
-import torch.distributed.checkpoint.state_dict_loader as DCPLoader
-from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+import torch.distributed.checkpoint as DCP
+from torch.distributed.checkpoint.state_dict import (
+    get_model_state_dict,
+    set_model_state_dict,
+    get_optimizer_state_dict,
+    set_optimizer_state_dict,
+    StateDictOptions,
+)
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torchvision.utils import save_image
@@ -17,7 +22,6 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils.torch_utils import is_compiled_module
 
 from pathlib import Path
-from safetensors.torch import load_file, save_file
 from dataclasses import dataclass
 from typing import Literal
 from omegaconf import OmegaConf
@@ -32,7 +36,7 @@ from utils.logger import setup_logger
 
 from trainer.parallel.fsdp_strategy import FSDPStrategy
 from trainer.parallel.handler import parallel_handler
-from trainer.parallel.utils import is_main_process, wait_for_everyone
+from trainer.parallel.utils import is_main_process, wait_for_everyone, is_fsdp_module
 
 
 @dataclass
@@ -54,8 +58,8 @@ class BaseTrainer:
     checkpoint_dir: str = "outputs/checkpoints"
     evaluation_dir: str = "outputs/evaluations"
     log_dir: str = "outputs/logs"
-    model_state_dict_file: str = "transformer.safetensors"
-    optimizer_state_dict_file: str = "optimizer.pth"
+    model_state_dict_dir: str = "model"
+    optimizer_state_dict_dir: str = "optimizer"
     data_sampler_state_dict_file: str = "data_sampler.pth"
     training_state_dict_file: str = "train_state.pth"
 
@@ -161,17 +165,17 @@ class BaseTrainer:
                 device=self.device,
                 dtype=self._train_dtype,
             )
-        
+
         elif FSDPStrategy.is_full_shard(self.fsdp_strategy):
             self.pipe.setup_fsdp_modules(
                 fsdp_strategy=FSDPStrategy.FULL_SHARD,
                 device=self.device,
                 dtype=self._train_dtype,
             )
-        
+
         else:
             logger.warning(f"Unsupported FSDPStrategy: {self.fsdp_strategy}.")
-        
+
         if self.enable_gradient_checkpoint:
             self.unwrap_model(self.pipe.transformer).enable_gradient_checkpointing()
 
@@ -238,7 +242,7 @@ class BaseTrainer:
         self.epoch_start = 0
         self.current_epoch = 0
         self.num_epochs = math.ceil(self.max_training_steps / self.update_steps_per_epoch)
-        
+
         # TODO: FSDP checkpoints
         if self.resume_from is not None and os.path.exists(self.resume_from):
             self.load_checkpoints(self.resume_from)
@@ -258,22 +262,69 @@ class BaseTrainer:
         model = model._orig_mod if is_compiled_module(model) else model
         return model
 
-    def get_model_checkpoints_to_save(self) -> dict[str, torch.Tensor]:
+    def set_fsdp_gradient_sync(self, enabled: bool = True):
+        for module in self.pipe.fsdp_modules:
+            if is_fsdp_module(module):
+                module.set_requires_gradient_sync(enabled, recurse=True)
+
+    def save_model_checkpoints(self, checkpoint_dir: Path):
         r"""
         Can be overriden if difference saving strategy is required,
         only parameters with gradients will be saved by default.
         """
-        transformer = self.unwrap_model(self.pipe.transformer)
-        states_to_save = {}
-        for n, p in transformer.named_parameters():
-            if p.requires_grad:
-                states_to_save[n] = p.detach().cpu()
-        return states_to_save
+        transformer_states = get_model_state_dict(
+            model=self.pipe.transformer,
+            options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True),
+        )
+        DCP.save({"model": transformer_states}, checkpoint_id=str(checkpoint_dir / self.model_state_dict_dir))
 
-    def load_model_checkpoints_to_recover(self, model_states: dict[str, torch.Tensor]) -> tuple[list[str]]:
-        transformer = self.unwrap_model(self.pipe.transformer)
-        missing, unexpected = transformer.load_state_dict(model_states, strict=False)
-        return missing, unexpected
+    def load_model_checkpoints(self, checkpoint_dir: Path):
+        model_path = checkpoint_dir / self.model_state_dict_dir
+        if not model_path.exists():
+            logger.warning(f"Model checkpoint not found: {model_path}.")
+            return
+
+        transformer_states = get_model_state_dict(
+            self.pipe.transformer,
+            options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True),
+        )
+        DCP.load({"model": transformer_states}, checkpoint_id=str(model_path))
+        set_model_state_dict(
+            self.pipe.transformer,
+            transformer_states,
+            options=StateDictOptions(full_state_dict=False, strict=False),
+        )
+
+    def save_optimizer_checkpoints(self, checkpoint_dir: Path):
+        if not self.enable_save_optimizer:
+            return
+        optimizer_states = get_optimizer_state_dict(
+            model=self.pipe.transformer,
+            optimizers=self.optimizer,
+            options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True),
+        )
+        DCP.save({"optimizer": optimizer_states}, checkpoint_id=str(checkpoint_dir / self.optimizer_state_dict_dir))
+
+    def load_optimizer_checkpoints(self, checkpoint_dir: Path):
+        if not self.enable_save_optimizer:
+            return
+        opt_path = checkpoint_dir / self.optimizer_state_dict_dir
+        if not opt_path.exists():
+            logger.warning(f"Optimizer checkpoints not found: {opt_path}.")
+            return
+
+        optimizer_states = get_optimizer_state_dict(
+            model=self.pipe.transformer,
+            optimizers=self.optimizer,
+            options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True),
+        )
+        DCP.load({"optimizer": optimizer_states}, checkpoint_id=str(opt_path))
+        set_optimizer_state_dict(
+            model=self.pipe.transformer,
+            optimizers=self.optimizer,
+            optim_state_dict=optimizer_states,
+            options=StateDictOptions(full_state_dict=False, strict=False),
+        )
 
     def save_checkpoints(self, global_step: int):
         r"""
@@ -283,37 +334,31 @@ class BaseTrainer:
         """
         if not (global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
             return
-        if not self.is_main_process:
-            wait_for_everyone()
-            return
 
-        checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
-        checkpoint_dir.mkdir(exist_ok=True, parents=True)
+        if self.is_main_process:
+            checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
+            checkpoint_dir.mkdir(exist_ok=True, parents=True)
 
-        # Train state
-        train_path = Path(checkpoint_dir) / self.training_state_dict_file
-        train_state = self.train_state_dict()
-        torch.save(train_state, train_path)
+            # Train state
+            train_path = Path(checkpoint_dir) / self.training_state_dict_file
+            train_state = self.train_state_dict()
+            torch.save(train_state, train_path)
 
-        # Data sampler
-        if self.train_sampler is not None:
-            ds_path = Path(checkpoint_dir) / self.data_sampler_state_dict_file
-            ds_state = self.train_sampler.state_dict()
-            torch.save(ds_state, ds_path)
+            # Data sampler
+            if self.train_sampler is not None:
+                ds_path = Path(checkpoint_dir) / self.data_sampler_state_dict_file
+                ds_state = self.train_sampler.state_dict()
+                torch.save(ds_state, ds_path)
 
-        # Model
-        states_to_save = self.get_model_checkpoints_to_save()
-        model_path = os.path.join(checkpoint_dir, self.model_state_dict_file)
-        save_file(states_to_save, model_path)
-
-        # Optimizer
-        if self.enable_save_optimizer:
-            opt_path = checkpoint_dir / self.optimizer_state_dict_file
-            opt_state = self.optimizer.state_dict()
-            torch.save(opt_state, opt_path)
-
-        logger.info(f"Checkpoints saved to {checkpoint_dir}.")
         wait_for_everyone()
+
+        self.save_model_checkpoints(checkpoint_dir)
+        self.save_optimizer_checkpoints(checkpoint_dir)
+
+        wait_for_everyone()
+
+        if self.is_main_process:
+            logger.info(f"Checkpoints saved to {checkpoint_dir}.")
 
     def load_checkpoints(self, checkpoint_path: str, **kwargs):
         checkpoint_dir = Path(checkpoint_path)
@@ -336,26 +381,15 @@ class BaseTrainer:
             loaded_components.append("train_state")
 
         # Model
-        model_path = checkpoint_dir / self.model_state_dict_file
-        missing = unexpected = []
-        if model_path.exists():
-            model_states = load_file(checkpoint_path)
-            missing, unexpected = self.load_model_checkpoints_to_recover(model_states)
-            loaded_components.append("model")
+        self.load_model_checkpoints(checkpoint_dir)
+        loaded_components.append("model")
 
         # Optimizer
-        opt_path = checkpoint_dir / self.optimizer_state_dict_file
-        if opt_path.exists():
-            opt_states = torch.load(opt_path)
-            self.optimizer.load_state_dict(opt_states)
-            loaded_components.append("optimizer")
+        self.load_optimizer_checkpoints(checkpoint_dir)
+        loaded_components.append("optimizer")
 
-        logger.info(
-            f"\nLoad checkpoints from {checkpoint_path}."
-            + f"\nSuccessfully load: {','.join(loaded_components)}."
-            + f"\nModel keys: missing: {len(missing)}, unexpected: {len(unexpected)}."
-        )
         wait_for_everyone()
+        logger.info(f"\nLoad checkpoints from {checkpoint_path}.\nSuccessfully load: {','.join(loaded_components)}.")
 
     def train(self):
         r"""
@@ -378,6 +412,9 @@ class BaseTrainer:
 
             for step, batch in enumerate(self.train_loader):
                 global_step += 1
+                is_sync_step = global_step % self.gradient_accumulation_steps == 0
+                self.set_fsdp_gradient_sync(is_sync_step)
+
                 loss_dict = self.pipe.forward_step(batch)
 
                 if isinstance(loss_dict, dict):
@@ -396,13 +433,7 @@ class BaseTrainer:
                 else:
                     metrics["loss"] += loss.item()
 
-                if isinstance(loss_dict, dict):
-                    for k, l in loss_dict.items():
-                        if k not in metrics:
-                            metrics[k] = 0
-                        metrics[k] += l.item()
-
-                if global_step % self.gradient_accumulation_steps != 0:
+                if not is_sync_step:
                     continue
 
                 torch.nn.utils.clip_grad_norm_(self.pipe.trainable_params, self.max_grad_norm)
@@ -413,6 +444,7 @@ class BaseTrainer:
 
                 metric_info = " | ".join([f"{k}:{l:.6f}" for k, l in metrics.items()])
                 logger.info(f"Train [{global_step:->{align}}/{self.max_training_steps}]\n{metric_info}")
+
                 self.save_checkpoints(global_step)
                 self.evaluate(global_step)
 
