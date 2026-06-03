@@ -28,9 +28,9 @@ def parallel_check(required_env: str, default_value: Any | None = None) -> Any:
 
         return wrapper
 
-    if callable(fallback_value):
-        actual_func = fallback_value
-        fallback_value = None
+    if callable(required_env):
+        actual_func = required_env
+        required_env = None
         return decorator(actual_func)
     return decorator
 

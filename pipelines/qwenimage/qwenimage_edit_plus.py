@@ -44,7 +44,6 @@ class QwenImageEditPlus(BasePipeline):
     text_pipeline: QwenImageEditPlusPipeline = field(init=False, default=None)
 
     def __post_init__(self):
-        # TODO: Initialize FSDP module
         self.vae = (
             AutoencoderKLQwenImage.from_pretrained(self.pretrained_model, subfolder="vae", torch_dtype=self.dtype)
             .to(self.device)
@@ -63,23 +62,26 @@ class QwenImageEditPlus(BasePipeline):
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.image_processor = self.text_pipeline.image_processor
 
-        self.setup_fsdp_modules()
+        # We setup following attributes before FSDP wrapping
+        self.vae_scale_factor = 2 ** len(self.vae.config.temperal_downsample) if getattr(self, "vae", None) else 8
+        self.vae_channels = self.vae.config.z_dim
+        self.pacth_size = self.transformer.config.patch_size if getattr(self, "transformer", None) else 2
 
     @property
     def trainable_params(self) -> list[torch.Tensor]:
         return [p for p in self.transformer.parameters() if p.requires_grad]
 
-    @property
-    def vae_scale_factor(self) -> int:
-        return 2 ** len(self.vae.config.temperal_downsample) if getattr(self, "vae", None) else 8
+    # @property
+    # def vae_scale_factor(self) -> int:
+    #     return 2 ** len(self.vae.config.temperal_downsample) if getattr(self, "vae", None) else 8
 
-    @property
-    def vae_channels(self) -> int:
-        return self.vae.config.z_dim
+    # @property
+    # def vae_channels(self) -> int:
+    #     return self.vae.config.z_dim
 
-    @property
-    def pacth_size(self) -> int:
-        return self.transformer.config.patch_size if getattr(self, "transformer", None) else 2
+    # @property
+    # def pacth_size(self) -> int:
+    #     return self.transformer.config.patch_size if getattr(self, "transformer", None) else 2
 
     def preprocess_inputs(self, batch) -> dict[str, Any]:
         r"""
