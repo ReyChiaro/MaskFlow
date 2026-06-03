@@ -8,6 +8,8 @@ eval_data_configs: ${evalset}
 lora_configs: ${adapter}
 lr_scheduler_configs: null
 
+enable_save_optimizer: true
+
 base_seed: 42
 output_dir: ${project.output_dir}
 checkpoint_dir: ${project.checkpoint_dir}
@@ -25,6 +27,8 @@ enable_gradient_checkpoint: true
 gradient_accumulation_steps: 1
 cudnn_deterministic: false
 cudnn_benchmark: true
+
+fsdp_strategy: no_shard
 
 batch_size_per_process: 1
 data_loader_workers: 8

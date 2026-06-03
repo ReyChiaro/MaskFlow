@@ -36,7 +36,9 @@ class LoraTrainer(BaseTrainer):
 
         for n, p in self.pipe.transformer.named_parameters():
             if cfgs.adapter_name in n and "lora_" in n:
-                p = p.to(self.device, dtype=self._train_dtype)
+                p.data = p.to(self.device, dtype=self._train_dtype).data
+                if p.grad is not None:
+                    p.grad = p.grad.to(self.device, dtype=self._train_dtype)
                 p.requires_grad_(True)
 
         logger.info(f"Add LoRA adapter to transformer.")

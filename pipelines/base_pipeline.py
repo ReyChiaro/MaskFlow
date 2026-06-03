@@ -52,6 +52,7 @@ class BasePipeline:
     transformer: ModelMixin | PeftAdapterMixin = dataclasses.field(init=None)
     scheduler: SchedulerMixin = dataclasses.field(init=None)
     fsdp_configs: dict | None = None
+    fsdp_modules: list | None = None
 
     @property
     def summary(self) -> dict[str, dict[str, int | float]]:
@@ -80,40 +81,54 @@ class BasePipeline:
         pass
 
     def setup_fsdp_modules(self, fsdp_strategy: FSDPStrategy, device: torch.device, dtype: torch.dtype):
+        # VAE: Full parameters to all devices
+        self.vae.to(device, dtype=dtype)
+
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=dtype,
+            reduce_dtype=torch.float32,
+            cast_forward_inputs=False,
+        )
+        mesh = parallel_handler.get_device_mesh(fsdp_strategy)
+
         if FSDPStrategy.is_no_shard(fsdp_strategy):
-            self.vae.to(device, dtype=dtype)
+            if self.fsdp_configs is not None:
+                logger.warning(f"FSDPStrategy is {fsdp_strategy}, fsdp_configs will be ignored.")
+
             self.text_pipeline.to(device, dtype=dtype)
             self.transformer.to(device, dtype=dtype)
 
+            self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
+
         elif FSDPStrategy.is_full_shard(fsdp_strategy):
-            mp_policy = MixedPrecisionPolicy(param_dtype=dtype, reduce_dtype=torch.float32, cast_forward_inputs=False)
-            mesh = parallel_handler.get_device_mesh()
-
-            self.vae.to(device, dtype=dtype)
-
+            assert self.fsdp_configs is not None, f"FSDPStrategy is {fsdp_strategy}, but fsdp_configs are not given."
             module_configs = []
-            if self.fsdp_configs is not None:
-                for module_name, raw_configs in self.fsdp_configs.items():
-                    configs: dict[str, Any] = copy.deepcopy(raw_configs)
+            for module_name, raw_configs in self.fsdp_configs.items():
+                configs: dict[str, Any] = copy.deepcopy(raw_configs)
 
-                    is_iterable = configs.pop("iterable", False)
-                    reshard_after_forward = configs.pop("reshard_after_forward", True)
+                is_iterable = configs.pop("iterable", False)
+                reshard_after_forward = configs.pop("reshard_after_forward", True)
 
-                    module = get_nested_attr(self, module_name)
+                module = get_nested_attr(self, module_name)
 
-                    if is_iterable:
-                        for submodule in module:
-                            module_configs.append((None, submodule, configs))
-                    else:
-                        module_configs.append((module_name, module, configs))
+                if is_iterable:
+                    for submodule in module:
+                        module_configs.append((None, submodule, configs))
+                else:
+                    module_configs.append((module_name, module, configs))
 
-                for module_name, module, configs in module_configs:
-                    fsdp_kwargs = dict(
-                        mesh=mesh, mp_policy=mp_policy, reshard_after_forward=reshard_after_forward, **configs
-                    )
-                    wrapped = fully_shard(module, **fsdp_kwargs)
-                    if module_name is not None:
-                        set_nested_attr(self, module_name, wrapped)
+            for module_name, module, configs in module_configs:
+                fsdp_kwargs = dict(
+                    mesh=mesh,
+                    mp_policy=mp_policy,
+                    reshard_after_forward=reshard_after_forward,
+                    **configs,
+                )
+                wrapped = fully_shard(module, **fsdp_kwargs)
+                if module_name is not None:
+                    set_nested_attr(self, module_name, wrapped)
+
+            self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
         else:
             logger.warning(f"Unsupported FSDPStrategy: {fsdp_strategy}.")
         return self

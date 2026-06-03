@@ -57,3 +57,10 @@ def is_distributed_usable() -> bool:
 def wait_for_everyone():
     if is_distributed_usable():
         torch.distributed.barrier()
+
+
+def is_fsdp_module(module) -> bool:
+    r"""
+    For FSDP2, we only check if the module has attribute `set_requires_gradient_sync`
+    """
+    return hasattr(module, "set_requires_gradient_sync")
