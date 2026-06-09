@@ -177,6 +177,8 @@ class BaseTrainer:
         if self.enable_gradient_checkpoint:
             self.unwrap_model(self.pipe.transformer).enable_gradient_checkpointing()
 
+        self.sync_trainable_parameters()
+
     def _init_optimizer(self):
         self.optimizer: Optimizer = instantiate(self.optimizer_configs, params=self.pipe.trainable_params)
         logger.info(f"Optimizer initialized.")
@@ -188,7 +190,7 @@ class BaseTrainer:
                 optimizer=self.optimizer,
                 step_rules=self.lr_scheduler_configs.step_rules,
                 num_warmup_steps=self.lr_scheduler_configs.num_warmup_steps * self.world_size,
-                num_training_steps=self.training_steps_per_process * self.world_size,
+                num_training_steps=self.max_training_steps,
                 num_cycles=self.lr_scheduler_configs.num_cycles,
                 power=self.lr_scheduler_configs.power,
                 last_epoch=self.lr_scheduler_configs.last_epoch,
@@ -215,8 +217,8 @@ class BaseTrainer:
                 evalset,
                 batch_size_per_process=self.batch_size_per_process,
                 num_workers=self.data_loader_workers,
-                num_replicas=self.world_size,
-                global_rank=self.global_rank,
+                num_replicas=1,
+                global_rank=0,
                 global_seed=self.base_seed,
                 drop_last=False,
                 is_train=False,
@@ -240,7 +242,11 @@ class BaseTrainer:
         self.update_steps_per_epoch = math.ceil(len(self.train_loader) / self.gradient_accumulation_steps)
         self.epoch_start = 0
         self.current_epoch = 0
-        self.num_epochs = math.ceil(self.max_training_steps / self.update_steps_per_epoch)
+        self.global_step = 0
+        self.micro_step = 0
+        self.num_epochs = math.ceil(
+            self.max_training_steps * self.gradient_accumulation_steps / max(len(self.train_loader), 1)
+        ) + 1
 
         if self.resume_from is not None and os.path.exists(self.resume_from):
             self.load_checkpoints(self.resume_from)
@@ -248,10 +254,16 @@ class BaseTrainer:
         self._initialized = True
 
     def train_state_dict(self) -> dict:
-        return {"epoch": self.current_epoch}
+        return {
+            "epoch": self.current_epoch,
+            "global_step": self.global_step,
+            "micro_step": self.micro_step,
+        }
 
     def load_train_state_dict(self, state_dict):
         self.current_epoch = state_dict.get("epoch", 0)
+        self.global_step = state_dict.get("global_step", 0)
+        self.micro_step = state_dict.get("micro_step", self.global_step * self.gradient_accumulation_steps)
 
     @staticmethod
     def unwrap_model(model: DistributedDataParallel | torch.nn.Module):
@@ -264,6 +276,21 @@ class BaseTrainer:
         for module in self.pipe.fsdp_modules:
             if is_fsdp_module(module):
                 module.set_requires_gradient_sync(enabled, recurse=True)
+
+    def sync_gradients(self):
+        if self.world_size <= 1 or not FSDPStrategy.is_no_shard(self.fsdp_strategy):
+            return
+        for param in self.pipe.trainable_params:
+            if param.grad is None:
+                continue
+            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+            param.grad.div_(self.world_size)
+
+    def sync_trainable_parameters(self):
+        if self.world_size <= 1 or not FSDPStrategy.is_no_shard(self.fsdp_strategy):
+            return
+        for param in self.pipe.trainable_params:
+            dist.broadcast(param.data, src=0)
 
     def save_model_checkpoints(self, checkpoint_dir: Path):
         r"""
@@ -399,18 +426,25 @@ class BaseTrainer:
         summary_table = get_summary_table(pipe_summary)
         logger.info(summary_table)
 
-        global_step = 0
+        global_step = self.global_step
+        micro_step = self.micro_step
         metrics = {"loss": 0.0}
         align = len(str(self.max_training_steps))
+        resumed_sampler = self.train_sampler is not None and getattr(self.train_sampler, "resume_idx", 0) > 0
         for epoch in range(self.current_epoch, self.num_epochs):
+            self.current_epoch = epoch
             if self.train_sampler is not None:
-                self.train_sampler.set_epoch(epoch)
+                if resumed_sampler:
+                    resumed_sampler = False
+                else:
+                    self.train_sampler.set_epoch(epoch)
             if self.eval_sampler is not None:
                 self.eval_sampler.set_epoch(epoch)
 
             for step, batch in enumerate(self.train_loader):
-                global_step += 1
-                is_sync_step = global_step % self.gradient_accumulation_steps == 0
+                micro_step += 1
+                self.micro_step = micro_step
+                is_sync_step = micro_step % self.gradient_accumulation_steps == 0
                 self.set_fsdp_gradient_sync(is_sync_step)
 
                 loss_dict = self.pipe.forward_step(batch)
@@ -434,12 +468,15 @@ class BaseTrainer:
                 if not is_sync_step:
                     continue
 
+                self.sync_gradients()
                 torch.nn.utils.clip_grad_norm_(self.pipe.trainable_params, self.max_grad_norm)
                 self.optimizer.step()
                 if self.lr_scheduler is not None:
                     self.lr_scheduler.step()
                 self.optimizer.zero_grad()
 
+                global_step += 1
+                self.global_step = global_step
                 metric_info = " | ".join([f"{k}:{l:.6f}" for k, l in metrics.items()])
                 logger.info(f"Train [{global_step:->{align}}/{self.max_training_steps}]\n{metric_info}")
 
@@ -450,9 +487,9 @@ class BaseTrainer:
                 for k in metrics:
                     metrics[k] = 0.0
 
-                if global_step > self.max_training_steps:
+                if global_step >= self.max_training_steps:
                     break
-            if global_step > self.max_training_steps:
+            if global_step >= self.max_training_steps:
                 break
 
         dist.destroy_process_group()
@@ -465,36 +502,42 @@ class BaseTrainer:
         if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
             return
 
+        should_run_eval = self.is_main_process or FSDPStrategy.is_full_shard(self.fsdp_strategy)
+        save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
         if self.is_main_process:
-            save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
             os.makedirs(save_dir, exist_ok=True)
             logger.info(f"Evaluate start, save to {save_dir}.")
+        wait_for_everyone()
+
+        if should_run_eval:
             for step, batch in enumerate(self.eval_loader):
                 output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
+
+                if not self.is_main_process:
+                    continue
 
                 if not isinstance(output, (tuple, list)):
                     output = [output]
 
                 conditions = batch["conditions"]
                 target = batch["target"]
-                image_name = batch["image_name"][0]
+                image_names = batch["image_name"]
 
-                # 4D
-                tensors = [*conditions, target, *output]
-                max_h = max([t.shape[-2] for t in tensors])
-                tensors = [t.squeeze(0) for t in tensors]
-                tensors = [
-                    F.pad(
-                        input=t,
-                        pad=(0, 0, 0, max_h - t.shape[1]),
-                        mode="constant",
-                        value=0,
-                    ).to(self.device, dtype=self._eval_dtype)
-                    for t in tensors
-                ]
-                tensors = torch.cat(tensors, dim=-1)
-                save_path = os.path.join(save_dir, f"{image_name}.jpg")
-                save_image(tensors, save_path)
-                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {image_name}")
+                for batch_idx, image_name in enumerate(image_names):
+                    tensors = [*[c[batch_idx] for c in conditions], target[batch_idx], *[o[batch_idx] for o in output]]
+                    max_h = max([t.shape[-2] for t in tensors])
+                    tensors = [
+                        F.pad(
+                            input=t,
+                            pad=(0, 0, 0, max_h - t.shape[1]),
+                            mode="constant",
+                            value=0,
+                        ).to(self.device, dtype=self._eval_dtype)
+                        for t in tensors
+                    ]
+                    tensors = torch.cat(tensors, dim=-1)
+                    save_path = os.path.join(save_dir, f"{image_name}.jpg")
+                    save_image(tensors, save_path)
+                    logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {image_name}")
             logger.info(f"Evaluation finished, saved to {save_dir}.")
         wait_for_everyone()

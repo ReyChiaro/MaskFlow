@@ -29,7 +29,7 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         timesteps = sigmas.clone()
 
         while sigmas.ndim < x0.ndim:
-            sigmas = sigmas.unsqueeze(0)
+            sigmas = sigmas.unsqueeze(-1)
 
         x0 = x0.float()
         noise = noise.float()
@@ -95,10 +95,10 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         for step in range(num_inference_steps + 1):
             inferencer = _Inferencer()
             try:
-                yield xt, sigmas[step : step + 1], inferencer
-            finally:
                 if step >= num_inference_steps:
                     continue
+                yield xt, sigmas[step : step + 1], inferencer
+            finally:
                 sigma = sigmas[step]
                 sigma_next = sigmas[step + 1]
                 xt = self.step(xt.float(), inferencer.pred_v, sigma_next - sigma).to(xt.device, dtype=xt.dtype)

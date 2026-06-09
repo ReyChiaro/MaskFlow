@@ -97,6 +97,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         conditions: list[torch.Tensor] = [source, mask]
         mask_ratio = mask.sum(dim=(-2, -1, 1), keepdim=True) / (mask.shape[-2] * mask.shape[-1] * mask.shape[1])
+        mask_ratio = mask_ratio.view(mask.shape[0], 1, 1)
 
         mask_image = mask.clone()
         edge_image = edge.clone()
@@ -277,17 +278,18 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         Compute loss with masks and edges.
         """
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
-        loss_dict = {"loss": 0}
+        loss = None
+        loss_dict = {}
 
         if mask_latents is not None:
             mask_field = mask_latents * loss_field
             if mask_ratio is not None and self.mask_loss_weight > 0:
                 mask_field = self.mask_loss_weight * (1.0 / (mask_ratio + 1e-6)) * mask_field
-                loss_dict["mask_ratio"] = mask_ratio
+                loss_dict["mask_ratio"] = mask_ratio.mean()
 
             mask_loss = (mask_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
             loss_dict["mask_loss"] = mask_loss
-            loss_dict["loss"] = loss_dict["loss"] + mask_loss
+            loss = mask_loss if loss is None else loss + mask_loss
 
         if edge_latents is not None and self.edge_loss_weight > 0:
             # edge_field = self.edge_loss_weight * edge * loss_field
@@ -296,9 +298,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             # loss_dict["loss"] = loss_dict["loss"] + edge_loss
             pass
 
-        if loss_dict["loss"] == 0:
+        if loss is None:
             loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
-            loss_dict["loss"] = loss
+        loss_dict["loss"] = loss
 
         return loss_dict
 
@@ -392,7 +394,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 - width (default: 1024)
                 - cfg_scale (default: 0)
         """
-        prompt = "" if prompt is None else None
+        prompt = "" if prompt is None else prompt
 
         # Target aspect ratio
         raw_ar = width / height
@@ -450,10 +452,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 image.append(mask)
 
             # Condition aspect ratio
-            if len(image) == 1 and mask is not None:
+            if mask_image is not None:
                 # Mask-based image editing should keep the source, mask and noise images shapes the same
-                image = T.resize(image, [height, width])
-                image_aspect = (image, width / height)
+                image = [T.resize(i, [height, width]) for i in image]
+                image_aspect = [(i, width / height) for i in image]
             else:
                 image_aspect = [crop_image_to_aspect_ratio(i) for i in image]
                 image = [reshape_to_divisible_max_resolution(i, ar, MAX_RESOLUTION) for i, ar in image_aspect]
