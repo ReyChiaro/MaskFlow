@@ -60,9 +60,12 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
         else:
             mu = self.shift_mu
         sigmas = self.time_shift(t, mu)  # [B,], float32
+        timesteps = sigmas.clone()
+        while sigmas.ndim < x0.ndim:
+            sigmas = sigmas.unsqueeze(-1)
 
         xt = (1.0 - sigmas) * x0.float() + sigmas * noise.float()
-        return xt.to(device, dtype=dtype), sigmas.to(device, dtype=dtype)
+        return xt.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
 
     def get_velocity(self, noise: torch.Tensor, x0: torch.Tensor):
         return noise - x0
@@ -91,10 +94,10 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
         for step in range(num_inference_steps + 1):
             inferencer = _Inferencer()
             try:
-                yield xt, sigmas[step : step + 1], inferencer
-            finally:
                 if step >= num_inference_steps:
                     continue
+                yield xt, sigmas[step : step + 1], inferencer
+            finally:
                 sigma = sigmas[step]
                 sigma_next = sigmas[step + 1]
                 xt = self.step(xt.float(), inferencer.pred_v, sigma_next - sigma).to(xt.device, dtype=xt.dtype)
