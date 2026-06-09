@@ -19,7 +19,9 @@ outputs/
 # Others
 .env
 tools/
-scripts/
+scripts/inference/
+scripts/evalution/
+scripts/utils/
 dataset/
 deprecated/
 _test*.py
