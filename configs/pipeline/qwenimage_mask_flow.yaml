@@ -4,12 +4,12 @@ _recursive_: true
 pretrained_model: Qwen/Qwen-Image-Edit-2511
 cfg_dropout: 0.1
 
-mask_dilation_kernel: 75
-mask_blur_kernel: 75
-mask_blur_sigma: 45.0
-mask_edge_width: 90  # dilate 45, erode 45
+mask_dilation_kernel: 25
+mask_blur_kernel: 25
+mask_blur_sigma: 25.0
+mask_edge_width: 50
 
-mask_loss_weight: 1.0
+mask_loss_weight: 0.5
 edge_loss_weight: 0.0
 
 fsdp_configs:

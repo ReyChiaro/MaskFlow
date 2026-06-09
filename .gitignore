@@ -20,6 +20,7 @@ outputs/
 .env
 tools/
 scripts/
+dataset/
 deprecated/
 _test*.py
 *.jsonl
