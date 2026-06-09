@@ -130,7 +130,6 @@ class BaseTrainer:
         torch.backends.cudnn.deterministic = self.cudnn_deterministic
         torch.backends.cudnn.benchmark = self.cudnn_benchmark
 
-        # TODO: Mixed precision
         self._train_dtype = torch.bfloat16
         self._eval_dtype = torch.bfloat16
 
@@ -207,7 +206,7 @@ class BaseTrainer:
             drop_last=False,
             is_train=True,
         )
-        logger.info(f"Train Dataloader and Sampler initialized.")
+        logger.info(f"Train Dataloader and Sampler initialized, length: {len(self.train_loader)}.")
         self.eval_loader = None
         self.eval_sampler = None
         if self.eval_data_configs is not None:
@@ -222,7 +221,7 @@ class BaseTrainer:
                 drop_last=False,
                 is_train=False,
             )
-            logger.info(f"Eval Dataloader and Sampler initialized.")
+            logger.info(f"Eval Dataloader and Sampler initialized, length: {len(self.eval_loader)}.")
 
     def init_everything(self):
         r"""
@@ -243,7 +242,6 @@ class BaseTrainer:
         self.current_epoch = 0
         self.num_epochs = math.ceil(self.max_training_steps / self.update_steps_per_epoch)
 
-        # TODO: FSDP checkpoints
         if self.resume_from is not None and os.path.exists(self.resume_from):
             self.load_checkpoints(self.resume_from)
 

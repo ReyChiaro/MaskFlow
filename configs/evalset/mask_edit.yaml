@@ -1,7 +1,7 @@
 _target_: data_module.MaskEditDataset
 
 image_root: ""
-data_file: "outputs/data_cache/test.jsonl"
+data_file: ""
 data_load_ratio: 1
 max_resolution: 1048576
 divisible_by: 16
