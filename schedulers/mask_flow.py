@@ -26,6 +26,10 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         else:
             mu = self.shift_mu
         sigmas = self.time_shift(t, mu)  # [B,], float32
+        timesteps = sigmas.clone()
+
+        while sigmas.ndim < x0.ndim:
+            sigmas = sigmas.unsqueeze(0)
 
         x0 = x0.float()
         noise = noise.float()
@@ -43,7 +47,7 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
                 f"{self.unmask_with=} is not supported. Acceptable values are [target, source, noisy_target, noisy_source]."
             )
 
-        return xt.to(device, dtype=dtype), sigmas.to(device, dtype=dtype)
+        return xt.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
 
     def get_velocity(self, noise, x0, source: torch.Tensor | None = None, mask: torch.Tensor | None = None):
         if source is None or mask is None:

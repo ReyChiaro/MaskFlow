@@ -19,7 +19,7 @@ resume_from: ""
 
 cfg_scale: 1.0
 max_grad_norm: 1.0
-max_training_steps: 5000
+max_training_steps: 20000
 save_steps: 100
 eval_steps: 100
 mixed_precision: bf16
