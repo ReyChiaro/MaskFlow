@@ -454,6 +454,8 @@ class BaseTrainer:
 
                 if global_step > self.max_training_steps:
                     break
+            if global_step > self.max_training_steps:
+                break
 
         dist.destroy_process_group()
         logger.info(f"🌊 Training Finished.")

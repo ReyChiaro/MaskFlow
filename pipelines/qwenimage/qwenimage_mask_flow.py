@@ -96,7 +96,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             edge = self.blur_mask(edge)
 
         conditions: list[torch.Tensor] = [source, mask]
-        mask_ratio = mask.sum() / (mask.shape[-2] * mask.shape[-1] * mask.shape[1])
+        mask_ratio = mask.sum(dim=(-2, -1, 1), keepdim=True) / (mask.shape[-2] * mask.shape[-1] * mask.shape[1])
 
         mask_image = mask.clone()
         edge_image = edge.clone()
