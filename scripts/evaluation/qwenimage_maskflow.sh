@@ -5,7 +5,7 @@ export CUDA_VISIBLE_DEVICES=2
 PIPELINE="qwenimage_mask_flow"
 BASE_MODEL="/data/nvme7/models/Qwen-Image-Edit-2511"
 IMAGE_ROOT="dataset/MaskEdit/scene"
-LORA_MODEL="outputs/experiments/maskflow_lora/20260609-115651/checkpoints/step-6000/model"
+LORA_MODEL="pretrained_weights/lora_adapter"
 
 torchrun \
     --nnodes=1 \
@@ -18,7 +18,7 @@ torchrun \
     project.project_name="eval_maskflow_lora" \
     evalset=mask_edit \
     evalset.image_root=$IMAGE_ROOT \
-    evalset.data_file=outputs/data_cache/testset.jsonl \
+    evalset.data_file=outputs/data_cache/demo.jsonl \
     pipeline=$PIPELINE \
     pipeline.pretrained_model=$BASE_MODEL \
     pipeline.mask_dilation_kernel=45 \
@@ -30,7 +30,7 @@ torchrun \
     adapter=lora \
     base_seed=42 \
     resume_from=$LORA_MODEL \
-    +is_fsdp_checkpoint=true \
+    +is_fsdp_checkpoint=false \
     +lora_safetensors_dir=pretrained_weights/lora_adapter \
     cfg_scale=1.0 \
     num_inference_steps=50
