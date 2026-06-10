@@ -1,6 +1,6 @@
 export HYDRA_FULL_ERROR=1
 export OMP_NUM_THREADS=8
-export CUDA_VISIBLE_DEVICES=0,7
+export CUDA_VISIBLE_DEVICES=0,1
 
 PIPELINE="qwenimage_mask_flow"
 BASE_MODEL="/data/nvme7/models/Qwen-Image-Edit-2511"
