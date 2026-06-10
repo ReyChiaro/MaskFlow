@@ -1,115 +1,92 @@
-import os
-import time
-
-import hydra
 import torch
-from hydra.utils import instantiate
-from loguru import logger
-from omegaconf import OmegaConf
-from torchvision.utils import save_image
+import hydra
+import torchvision.transforms.functional as T
+
+from pathlib import Path
+from PIL import Image
 from tqdm import tqdm
+from hydra.utils import instantiate
+from omegaconf import OmegaConf
+from loguru import logger
 
-from data_module import MaskEditDataset
-from pipelines import BasePipeline
-
-
-def get_value(cfg: OmegaConf, key: str, default, value_type):
-    value = getattr(cfg, key, default)
-    return default if value == default else value_type(value)
+from pipelines import QwenImageMaskFlow
+from data_module.mask_edit_dataset import MaskEditDataset
 
 
-def _to_batched_sample(sample: dict) -> dict:
-    return {
-        "prompt": [sample["prompt"]],
-        "negative_prompt": [sample.get("negative_prompt", "")],
-        "conditions": [condition.unsqueeze(0) for condition in sample["conditions"]],
-        "target": sample["target"].unsqueeze(0),
-    }
-
-
-def _mask_output_name(sample: dict) -> str:
-    mask_path = sample["conditions"][1]
-    return os.path.splitext(os.path.basename(mask_path))[0]
-
-
-@hydra.main(config_path="configs", config_name="inference", version_base="v1.2")
+@hydra.main(config_path="configs", config_name="evaluation", version_base="v1.2")
 def evaluate(cfgs: OmegaConf):
     r"""
-    Run LoRA evaluation over a JSONL file without building a DataLoader.
-
-    Common CLI overrides:
-        +data_file=outputs/data_cache/demo.jsonl
-        +image_root=.
-        +output_dir=outputs/evaluations/demo
-        +lora_model=outputs/checkpoints/step-xxx/adapter
-        +lora_adapter_name=default
+    Args: cfgs can include following options
+        +is_fsdp_checkpoint (bool)
     """
-    data_file = get_value(cfgs, "data_file", "", str)
-    image_root = get_value(cfgs, "image_root", "", str)
-    output_dir = get_value(cfgs, "output_dir", "outputs/evaluations", str)
-    data_load_ratio = get_value(cfgs, "data_load_ratio", 1.0, float)
 
-    max_resolution = get_value(cfgs, "max_resolution", 1024 * 1024, int)
-    divisible_by = get_value(cfgs, "divisible_by", 16, int)
-    enable_prompt_truncation = get_value(cfgs, "enable_prompt_truncation", False, bool)
-    replace_prompt_placeholder_with = get_value(
-        cfgs,
-        "replace_prompt_placeholder_with",
-        "the masked area in the image 2",
-        str,
-    )
-
-    rank = get_value(cfgs, "rank", 0, int)
-    seed = get_value(cfgs, "seed", int(time.time()), int)
-    num_inference_steps = get_value(cfgs, "num_inference_steps", 50, int)
-    cfg_scale = get_value(cfgs, "cfg_scale", 0.0, float)
-    lora_model = get_value(cfgs, "lora_model", None, str)
-    lora_adapter_name = get_value(cfgs, "lora_adapter_name", "default", str)
-
-    if not data_file:
-        raise ValueError("`data_file` must be provided, e.g. data_file=outputs/data_cache/demo.jsonl")
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+    device = torch.device("cuda:0")
+    dtype = torch.bfloat16
+    seed = cfgs.base_seed
     generator = torch.Generator(device).manual_seed(seed)
+    evaluate_dir = Path(cfgs.evaluation_dir)
+    evaluate_dir.mkdir(exist_ok=True, parents=True)
 
-    dataset = MaskEditDataset(
-        image_root=image_root,
-        data_file=data_file,
-        data_load_ratio=data_load_ratio,
-        max_resolution=max_resolution,
-        divisible_by=divisible_by,
-        enable_prompt_truncation=enable_prompt_truncation,
-        replace_prompt_placeholder_with=replace_prompt_placeholder_with,
-    )
+    pipe: QwenImageMaskFlow = instantiate(cfgs.pipe_configs, device=device, generator=generator, dtype=dtype)
+    pipe.transformer.requires_grad_(False)
 
-    pipe: BasePipeline = instantiate(cfgs.pipeline, generator=generator, device=device, dtype=dtype)
-    if lora_model is not None and os.path.exists(lora_model):
-        pipe.transformer.load_lora_adapter(lora_model, prefix=None, adapter_name=lora_adapter_name)
-        pipe.transformer.set_adapter(lora_adapter_name)
-        pipe.transformer.requires_grad_(False)
-        logger.info(f"Loaded LoRA adapter from {lora_model}.")
-    elif lora_model is not None:
-        raise FileNotFoundError(f"LoRA model path does not exist: {lora_model}")
+    if getattr(cfgs, "is_fsdp_checkpoint", False):
+        import peft
+        import torch.distributed.checkpoint as DCP
+        from torch.distributed.checkpoint.state_dict import get_model_state_dict, set_model_state_dict, StateDictOptions
 
-    logger.info(f"Evaluate {len(dataset)} samples, save to {output_dir}.")
-    for index in tqdm(range(len(dataset)), desc="Evaluating"):
-        raw_sample = dataset.samples[index]
-        batch = _to_batched_sample(dataset[index])
+        lora_configs = peft.LoraConfig(
+            r=cfgs.adapter.r,
+            lora_alpha=cfgs.adapter.lora_alpha,
+            lora_dropout=cfgs.adapter.lora_dropout,
+            bias="none",
+            target_modules=list(cfgs.adapter.target_modules),
+        )
+        pipe.transformer.add_adapter(lora_configs, adapter_name=cfgs.adapter.adapter_name)
+        pipe.transformer.set_adapter(cfgs.adapter_name)
 
-        with torch.inference_mode():
-            output = pipe.eval_step(batch, index, num_inference_steps, cfg_scale)
+        transformer_states = get_model_state_dict(
+            pipe.transformer,
+            options=StateDictOptions(full_state_dict=False, ignore_frozen_params=False),
+        )
+        DCP.load({"model": transformer_states}, checkpoint_id=str(cfgs.resume_from))
+        set_model_state_dict(
+            pipe.transformer,
+            transformer_states,
+            options=StateDictOptions(full_state_dict=False, strict=False),
+        )
+    else:
+        # safetensors
+        pipe.transformer.load_lora_adapter(cfgs.resume_from, prefix=None)
 
-        if isinstance(output, (tuple, list)):
-            output = output[-1]
+    dataset: MaskEditDataset = instantiate(cfgs.evalset)
 
-        save_path = os.path.join(output_dir, f"{_mask_output_name(raw_sample)}.jpg")
-        save_image(output[0].float().clamp(0, 1), save_path)
-        logger.info(f"Saved {save_path}.")
+    for i, sample in tqdm(enumerate(dataset), desc="Eval"):
+        prompt = sample.get("prompt", "")
+        negative_prompt = sample.get("negative_prompt", " ")
+        conditions = sample.get("conditions", None)
+        target = sample.get("target", None)
+        image_name = sample.get("image_name", "eval-image")
 
-    logger.info(f"Evaluation finished, saved to {output_dir}.")
+        if conditions is None or not isinstance(conditions, (list, tuple)) or len(conditions) != 2:
+            logger.warning(f"Eval [{i+1}/{len(dataset)}] Conditions not contain [source, mask]")
+            continue
+
+        source = T.to_pil_image(conditions[0].float())
+        mask = T.to_pil_image(conditions[1].float())
+
+        output: Image.Image = pipe.generate(
+            prompt=prompt,
+            image=source,
+            negative_prompt=negative_prompt,
+            mask=mask,
+            height=source.height,
+            width=source.width,
+            num_inference_steps=cfgs.num_inference_steps,
+            cfg_scale=cfgs.cfg_scale,
+        )
+
+        output.save(evaluate_dir / f"{image_name}.png")
 
 
 if __name__ == "__main__":

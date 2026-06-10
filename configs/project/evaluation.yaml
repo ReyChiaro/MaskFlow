@@ -1,0 +1,6 @@
+timestamp: ${now:%Y%m%d-%H%M%S}
+
+project_name: project-evaluate
+output_dir: outputs/evaluation/${project.project_name}/${project.timestamp}
+evaluation_dir: ${project.output_dir}/evaluations
+log_dir: ${project.output_dir}/logs
