@@ -1,0 +1,20 @@
+defaults:
+  - evalset: mask_edit
+  - pipeline: qwenimage_mask_flow
+  - project: evaluation
+  - adapter: lora
+  - _self_
+
+pipe_configs: ${pipeline}
+eval_data_configs: ${evalset}
+lora_configs: ${adapter}
+
+base_seed: 42
+resume_from: ""
+
+cfg_scale: 1.0
+num_inference_steps: 50
+
+hydra:
+  run:
+    dir: ${project.output_dir}/hydra-configs
