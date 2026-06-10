@@ -37,6 +37,7 @@ def evaluate(cfgs: OmegaConf):
     pipe: QwenImageMaskFlow = instantiate(cfgs.pipe_configs, device=device, generator=generator, dtype=dtype)
     pipe.transformer.requires_grad_(False)
 
+    safetensors_dir = cfgs.resume_from
     if getattr(cfgs, "is_fsdp_checkpoint", False):
         import peft
         import torch.distributed.checkpoint as DCP

@@ -21,7 +21,8 @@ outputs/
 tools/
 pretrained_weights/
 scripts/inference/
-scripts/utils/
+scripts/utils/*
+!scripts/utils/split_eval_data.py
 dataset/
 deprecated/
 _test*.py
