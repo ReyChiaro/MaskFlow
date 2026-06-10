@@ -23,6 +23,7 @@ from diffusers.utils.torch_utils import is_compiled_module
 
 from pathlib import Path
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Literal
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
@@ -73,6 +74,7 @@ class BaseTrainer:
     gradient_accumulation_steps: int = 1
     cudnn_deterministic: bool = False
     cudnn_benchmark: bool = True
+    distributed_timeout_seconds: int = 21600
 
     # Data Parallel
     fsdp_strategy: FSDPStrategy = FSDPStrategy.NO_SHARD
@@ -106,7 +108,7 @@ class BaseTrainer:
 
     def _init_context(self):
         # Init FSDP if required
-        dist.init_process_group("nccl")
+        dist.init_process_group("nccl", timeout=timedelta(seconds=self.distributed_timeout_seconds))
         parallel_handler.setup_parallel()
 
         # Init FSDP attributes
@@ -217,8 +219,8 @@ class BaseTrainer:
                 evalset,
                 batch_size_per_process=self.batch_size_per_process,
                 num_workers=self.data_loader_workers,
-                num_replicas=1,
-                global_rank=0,
+                num_replicas=self.world_size,
+                global_rank=self.global_rank,
                 global_seed=self.base_seed,
                 drop_last=False,
                 is_train=False,
@@ -502,42 +504,38 @@ class BaseTrainer:
         if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
             return
 
-        should_run_eval = self.is_main_process or FSDPStrategy.is_full_shard(self.fsdp_strategy)
         save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
         if self.is_main_process:
             os.makedirs(save_dir, exist_ok=True)
             logger.info(f"Evaluate start, save to {save_dir}.")
         wait_for_everyone()
 
-        if should_run_eval:
-            for step, batch in enumerate(self.eval_loader):
-                output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
+        for step, batch in enumerate(self.eval_loader):
+            output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
 
-                if not self.is_main_process:
-                    continue
+            if not isinstance(output, (tuple, list)):
+                output = [output]
 
-                if not isinstance(output, (tuple, list)):
-                    output = [output]
+            conditions = batch["conditions"]
+            target = batch["target"]
+            image_names = batch["image_name"]
 
-                conditions = batch["conditions"]
-                target = batch["target"]
-                image_names = batch["image_name"]
-
-                for batch_idx, image_name in enumerate(image_names):
-                    tensors = [*[c[batch_idx] for c in conditions], target[batch_idx], *[o[batch_idx] for o in output]]
-                    max_h = max([t.shape[-2] for t in tensors])
-                    tensors = [
-                        F.pad(
-                            input=t,
-                            pad=(0, 0, 0, max_h - t.shape[1]),
-                            mode="constant",
-                            value=0,
-                        ).to(self.device, dtype=self._eval_dtype)
-                        for t in tensors
-                    ]
-                    tensors = torch.cat(tensors, dim=-1)
-                    save_path = os.path.join(save_dir, f"{image_name}.jpg")
-                    save_image(tensors, save_path)
-                    logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {image_name}")
+            for batch_idx, image_name in enumerate(image_names):
+                tensors = [*[c[batch_idx] for c in conditions], target[batch_idx], *[o[batch_idx] for o in output]]
+                max_h = max([t.shape[-2] for t in tensors])
+                tensors = [
+                    F.pad(
+                        input=t,
+                        pad=(0, 0, 0, max_h - t.shape[1]),
+                        mode="constant",
+                        value=0,
+                    ).to(self.device, dtype=self._eval_dtype)
+                    for t in tensors
+                ]
+                tensors = torch.cat(tensors, dim=-1)
+                save_path = os.path.join(save_dir, f"{image_name}.jpg")
+                save_image(tensors, save_path)
+                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {image_name}")
+        if self.is_main_process:
             logger.info(f"Evaluation finished, saved to {save_dir}.")
         wait_for_everyone()
