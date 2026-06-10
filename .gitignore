@@ -19,6 +19,7 @@ outputs/
 # Others
 .env
 tools/
+pretrained_weights/
 scripts/inference/
 scripts/utils/
 dataset/
@@ -35,3 +36,4 @@ _[!_]*.py
 *.safetensors
 *.pth
 *.pt
+*.distcp
