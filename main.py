@@ -2,7 +2,7 @@ import hydra
 
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
-from trainer import BaseTrainer
+from trainer.base_trainer import BaseTrainer
 from loguru import logger
 
 

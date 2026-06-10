@@ -4,7 +4,7 @@ from loguru import logger
 from peft import LoraConfig
 from omegaconf import OmegaConf
 
-from trainer import BaseTrainer
+from trainer.base_trainer import BaseTrainer
 
 
 @dataclasses.dataclass

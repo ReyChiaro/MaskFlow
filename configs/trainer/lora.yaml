@@ -1,4 +1,4 @@
-_target_: trainer.LoraTrainer
+_target_: trainer.lora.LoraTrainer
 _recursive_: false
 
 pipe_configs: ${pipeline}

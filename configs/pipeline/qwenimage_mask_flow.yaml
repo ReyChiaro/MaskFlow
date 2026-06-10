@@ -1,4 +1,4 @@
-_target_: pipelines.QwenImageMaskFlow
+_target_: pipelines.qwenimage.qwenimage_mask_flow.QwenImageMaskFlow
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511

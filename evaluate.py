@@ -9,7 +9,7 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from loguru import logger
 
-from pipelines import QwenImageMaskFlow
+from pipelines.qwenimage.qwenimage_mask_flow import QwenImageMaskFlow
 from data_module.mask_edit_dataset import MaskEditDataset
 
 
