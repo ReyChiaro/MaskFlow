@@ -1,4 +1,4 @@
-_target_: pipelines.QwenImageEditPlus
+_target_: pipelines.qwenimage.qwenimage_edit_plus.QwenImageEditPlus
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
