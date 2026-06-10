@@ -18,7 +18,7 @@ from typing import Any, Iterable
 from loguru import logger
 
 from schedulers import MaskFlowScheduler
-from .qwenimage_edit_plus import QwenImageEditPlus
+from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus
 from data_module.utils import (
     reshape_to_divisible_max_resolution,
     crop_image_to_aspect_ratio,
@@ -525,4 +525,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         output = QwenImageEditPlusPipeline._unpack_latents(xt, height, width, self.vae_scale_factor)
         output = self.decode_image(output)
-        return T.to_pil_image(output[0].float())
+        return {
+            "output": T.to_pil_image(output[0].float()),
+            "processed_mask": T.to_pil_image(mask_image[0].float()),
+        }

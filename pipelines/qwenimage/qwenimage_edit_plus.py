@@ -17,7 +17,7 @@ from tqdm import tqdm
 from typing import Any, Literal, Iterable
 
 from schedulers import RectifiedFlowMatchingScheduler
-from pipelines import BasePipeline
+from pipelines.base_pipeline import BasePipeline
 from data_module.utils import (
     reshape_to_divisible_max_resolution,
     crop_image_to_aspect_ratio,
