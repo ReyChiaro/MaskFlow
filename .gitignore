@@ -20,7 +20,6 @@ outputs/
 .env
 tools/
 scripts/inference/
-scripts/evalution/
 scripts/utils/
 dataset/
 deprecated/
@@ -30,3 +29,9 @@ _test*.py
 *.jpg
 *.png
 *.log
+_[!_]*.py
+*.tar.gz
+*.zip
+*.safetensors
+*.pth
+*.pt
