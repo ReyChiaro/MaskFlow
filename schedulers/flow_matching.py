@@ -94,10 +94,10 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
         for step in range(num_inference_steps + 1):
             inferencer = _Inferencer()
             try:
-                if step >= num_inference_steps:
-                    continue
                 yield xt, sigmas[step : step + 1], inferencer
             finally:
+                if step >= num_inference_steps:
+                    continue
                 sigma = sigmas[step]
                 sigma_next = sigmas[step + 1]
                 xt = self.step(xt.float(), inferencer.pred_v, sigma_next - sigma).to(xt.device, dtype=xt.dtype)
