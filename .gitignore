@@ -37,3 +37,4 @@ _[!_]*.py
 *.pth
 *.pt
 *.distcp
+*.tar
