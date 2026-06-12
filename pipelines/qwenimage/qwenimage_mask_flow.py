@@ -33,18 +33,18 @@ from data_module.utils import (
 @dataclasses.dataclass
 class QwenMaskFlowPreprocessOutput(PreprocessOutput):
 
-    mask: torch.Tensor
-    edge: torch.Tensor
+    mask: torch.Tensor | None = None
+    edge: torch.Tensor | None = None
 
 
 @dataclasses.dataclass
 class QwenMaskFlowForwardOutput(QwenForwardOutput):
 
     # Mask and edge latents that are ``encoded'' by interpolation rather than VAE.
-    mask_latents: torch.Tensor
-    edge_latents: torch.Tensor
+    mask_latents: torch.Tensor | None = None
+    edge_latents: torch.Tensor | None = None
 
-    mask_ratio: torch.Tensor
+    mask_ratio: torch.Tensor | None = None
 
 
 @dataclasses.dataclass
@@ -108,7 +108,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         target: torch.Tensor = batch["target"].to(self.device, dtype=self.dtype)
 
         negative_prompt: Optional[list[str]] = batch.get("negative_prompt", None)
-        conditions: Optional[dict[str, torch.Tensor]] = batch.get("condtions", None)
+        conditions: Optional[dict[str, torch.Tensor]] = batch.get("conditions", None)
 
         if conditions is None or "mask" not in conditions or "source" not in conditions:
             logger.warning(
@@ -337,6 +337,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             image_shapes=image_shapes,
             mask_latents=mask_latents,
             edge_latents=edge_latents,
+            negative_prompt_embeds=neg_prompt_embeds,
+            negative_prompt_embeds_mask=neg_prompt_embeds_mask,
         )
 
     def compute_loss(
@@ -405,11 +407,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         xt = model_inputs.noise
         source = model_inputs.conditions[0]
         mask = model_inputs.mask_latents
-        noise = model_inputs.noise
+        noise = copy.deepcopy(model_inputs.noise)
 
-        with self.scheduler.inference(num_inference_steps, xt.shape[0]) as inferencer:
+        with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
             # with self.scheduler.inference_sampler(xt, num_inference_steps, source, mask_latents, xt.shape[1]) as sampler:
-            for t, curr_sigma, next_sigma in tqdm(inferencer, total=num_inference_steps):
+            for (t, curr_sigma, next_sigma) in tqdm(inferencer, total=num_inference_steps):
                 hidden_states = torch.cat([xt] + [c for c in model_inputs.conditions], dim=1)
                 timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
 
@@ -424,6 +426,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
                 # Do CFG
                 if cfg_scale > 1.0 and model_inputs.negative_prompt_embeds is not None:
+                    logger.info(f"Doing CFG")
                     neg_pred = self.denoise(
                         hidden_states=hidden_states,
                         timesteps=timestep,
