@@ -2,7 +2,7 @@ export HYDRA_FULL_ERROR=1
 export OMP_NUM_THREADS=8
 export CUDA_VISIBLE_DEVICES=3
 
-PIPELINE="qwenimage_mask_flow"
+PIPELINE="qwenimage_edit_plus_2511"
 BASE_MODEL="/data/nvme7/models/Qwen-Image-Edit-2511"
 IMAGE_ROOT="dataset/MaskEdit/scene"
 
@@ -24,14 +24,6 @@ torchrun \
     pipeline=$PIPELINE \
     pipeline.pretrained_model=$BASE_MODEL \
     pipeline.cfg_dropout=0.1 \
-    pipeline.mask_dilation_kernel=25 \
-    pipeline.mask_blur_kernel=25 \
-    pipeline.mask_blur_sigma=25.0 \
-    pipeline.mask_edge_width=50 \
-    pipeline.mask_loss_weight=0.5 \
-    pipeline.edge_loss_weight=0 \
-    pipeline.enable_vae_mask_encoding=true \
-    pipeline.enable_inpainting_denoise=true \
     adapter=lora \
     adapter.r=256 \
     adapter.lora_alpha=256 \

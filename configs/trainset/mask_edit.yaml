@@ -1,9 +1,9 @@
-_target_: data_module.MaskEditDataset
+_target_: data_module.mask_edit_dataset.MaskEditDataset
 
 image_root: ""
 data_file: ""
-data_load_ratio: 1
-max_resolution: 1048576
+load_start: 0.0
+load_end: 1.0
 divisible_by: 16
 enable_prompt_truncation: false
 replace_prompt_placeholder_with: "the masked area in the image 2"

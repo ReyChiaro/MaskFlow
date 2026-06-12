@@ -30,8 +30,8 @@ from omegaconf import OmegaConf
 from hydra.utils import instantiate
 from loguru import logger
 
-from pipelines import BasePipeline
-from data_module import SchemaDataset
+from pipelines.base_pipeline import BasePipeline
+from data_module.dataset import SchemaDataset
 from data_module.dataloader import get_dataloader
 from utils.summary import get_summary_table
 from utils.logger import setup_logger
@@ -87,7 +87,7 @@ class BaseTrainer:
 
     # Inference
     num_inference_steps: int = 50
-    cfg_scale: float = 0
+    cfg_scale: float = 1.0
 
     def __post_init__(self):
         r"""
@@ -108,14 +108,19 @@ class BaseTrainer:
         self._summary_table = {}
 
     def _init_context(self):
+        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        self.global_rank = int(os.environ.get("RANK", 0))
+        self.device = torch.device(self.global_rank % torch.cuda.device_count())
+
         # Init FSDP if required
-        dist.init_process_group("nccl", timeout=timedelta(seconds=self.distributed_timeout_seconds))
+        dist.init_process_group(
+            "nccl",
+            device_id=self.device,
+            timeout=timedelta(seconds=self.distributed_timeout_seconds),
+        )
         parallel_handler.setup_parallel()
 
         # Init FSDP attributes
-        self.world_size = dist.get_world_size()
-        self.global_rank = dist.get_rank()
-        self.device = torch.device(self.global_rank % torch.cuda.device_count())
         self.is_main_process = is_main_process()
         torch.cuda.set_device(self.device)
 
@@ -524,15 +529,16 @@ class BaseTrainer:
             target = batch.get("target", None)
             image_name = batch.get("image_name", None)
 
+            if conditions is not None:
+                if isinstance(conditions, dict):
+                    conditions = [c for c in conditions.values()]
+                if not isinstance(conditions, (tuple, list)):
+                    conditions = [conditions]
+
             for batch_idx in range(len(prompt)):
                 tensors = []
 
                 if conditions is not None:
-                    if isinstance(conditions, dict):
-                        conditions = [c for c in conditions.values()]
-                    if not isinstance(conditions, (tuple, list)):
-                        conditions = [conditions]
-
                     tensors.extend([*[c[batch_idx] for c in conditions]])
 
                 if target is not None:

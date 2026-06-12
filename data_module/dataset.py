@@ -1,4 +1,5 @@
 import os
+import math
 import json
 import torch
 import torchvision.transforms.functional as T
@@ -11,10 +12,16 @@ from typing import Any
 
 class SchemaDataset(Dataset):
 
-    def __init__(self, image_root: str, data_file: str, data_load_ratio: float = 1.0):
+    def __init__(
+        self,
+        image_root: str,
+        data_file: str,
+        load_start: int | float = 0.0,
+        load_end: int | float = 1.0,
+    ):
         r"""
         Args:
-            data_file (str): JSON or JSONL file.
+            data_file (str): JSONL file.
 
         TODO: Add aspect ratio bucket
         """
@@ -22,10 +29,10 @@ class SchemaDataset(Dataset):
         self.image_root = image_root
         self.data_file = data_file
 
-        self.samples = self._load_data_file(load_ratio=data_load_ratio)
+        self.samples = self._load_data_file(load_start=load_start, load_end=load_end)
         self.num_samples = len(self.samples)
 
-    def _load_data_file(self, load_ratio: float = 1.0):
+    def _load_data_file(self, load_start: int | float = 0.0, load_end: int | float = 1.0):
         if not os.path.exists(self.data_file):
             raise FileExistsError(f"{self.data_file} is not exists.")
 
@@ -34,7 +41,10 @@ class SchemaDataset(Dataset):
             for l in f:
                 samples.append(json.loads(l))
 
-        return samples[: min(len(samples), int(len(samples) * load_ratio))]
+        num_total = len(samples)
+        start_idx = load_start if isinstance(load_start, int) else math.floor(load_start * num_total)
+        end_idx = load_end if isinstance(load_end, int) else math.floor(load_end * num_total) + 1
+        return samples[start_idx : min(len(samples), end_idx)]
 
     def _load_image_tensor(self, path: str) -> torch.Tensor:
         return T.to_tensor(Image.open(path).convert("RGB"))

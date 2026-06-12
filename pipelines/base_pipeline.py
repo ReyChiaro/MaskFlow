@@ -81,8 +81,8 @@ class BasePipeline:
     transformer: ModelMixin | PeftAdapterMixin = dataclasses.field(init=None)
     scheduler: SchedulerMixin = dataclasses.field(init=None)
     fsdp_configs: dict | None = None
+    fsdp_modules: list | None = None
 
-    # _fsdp_modules: list | None = None
     _fsdp_module_configs: list[dict] | None = None
 
     @property
@@ -145,7 +145,7 @@ class BasePipeline:
             self.text_pipeline.to(device, dtype=dtype)
             self.transformer.to(device, dtype=dtype)
 
-            # self._fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
+            self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
 
         elif FSDPStrategy.is_full_shard(fsdp_strategy):
             assert self.fsdp_configs is not None, f"FSDPStrategy is {fsdp_strategy}, but fsdp_configs are not given."
@@ -174,7 +174,8 @@ class BasePipeline:
                 # if module_name is not None:
                 #     set_nested_attr(self, module_name, wrapped)
 
-            # self._fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
+            self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
+
         else:
             logger.warning(f"Unsupported FSDPStrategy: {fsdp_strategy}.")
         return self

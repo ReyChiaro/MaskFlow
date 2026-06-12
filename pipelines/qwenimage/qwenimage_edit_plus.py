@@ -44,7 +44,7 @@ class QwenImageEditPlus(BasePipeline):
     device: torch.device | None = None
     dtype: torch.dtype | None = None
 
-    cfg_dropout: float | None = None
+    cfg_dropout: float = 0.0
 
     vae: AutoencoderKLQwenImage = field(init=False, default=None)
     transformer: QwenImageTransformer2DModel = field(init=False, default=None)
@@ -90,12 +90,15 @@ class QwenImageEditPlus(BasePipeline):
         target: torch.Tensor = batch["target"].to(self.device, dtype=self.dtype)
 
         negative_prompt: Optional[list[str]] = batch.get("negative_prompt", None)
-        conditions: Optional[dict[str, torch.Tensor]] = batch.get("condtions", None)
+        conditions: Optional[dict[str, torch.Tensor]] = batch.get("conditions", None)
 
         if conditions is not None:
-            conditions: dict[str, torch.Tensor] = {
-                k: c.to(self.device, dtype=self.dtype) for k, c in conditions.items()
-            }
+            if isinstance(conditions, dict):
+                conditions: dict[str, torch.Tensor] = {
+                    k: c.to(self.device, dtype=self.dtype) for k, c in conditions.items()
+                }
+            else:
+                conditions = [c.to(self.device, dtype=self.dtype) for k, c in conditions]
 
         # ---------------- Preprocess ---------------- #
         # To tensor and reshape to target areas
@@ -331,7 +334,7 @@ class QwenImageEditPlus(BasePipeline):
             img_shapes=model_inputs.image_shapes,
             img_seq_len=model_inputs.noised_target.shape[1],
         )
-        loss = self.compute_loss(predictions, model_inputs["gt"])
+        loss = self.compute_loss(predictions, model_inputs.ground_truth)
         return loss
 
     @torch.inference_mode()

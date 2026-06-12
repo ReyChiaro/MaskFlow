@@ -1,13 +1,11 @@
 import os
-import math
 import torch
-import torchvision.transforms.functional as T
 
 from pathlib import Path
 from typing import Any
 
 from data_module.dataset import SchemaDataset
-from data_module.utils import ASPECT_RATIOS
+from data_module.utils import crop_image_to_aspect_ratio, reshape_to_divisible_max_resolution
 
 
 class MaskEditDataset(SchemaDataset):
@@ -16,16 +14,15 @@ class MaskEditDataset(SchemaDataset):
         self,
         image_root,
         data_file,
-        data_load_ratio=1,
-        max_resolution: int = 1024 * 1024,
+        load_start: int | float = 0.0,
+        load_end: int | float = 1.0,
         divisible_by: int = 16,
         enable_prompt_truncation: bool = False,
         replace_prompt_placeholder_with: str | None = None,
     ):
-        super().__init__(image_root, data_file, data_load_ratio)
+        super().__init__(image_root, data_file, load_start, load_end)
 
         self.divisible_by = divisible_by
-        self.max_resolution = max_resolution
         self.replace_prompt_placeholder_with = replace_prompt_placeholder_with
         self.enable_prompt_truncation = enable_prompt_truncation
 
@@ -37,36 +34,6 @@ class MaskEditDataset(SchemaDataset):
 
     def _replace_placeholder(self, prompt: str, replacement: str, placeholder: str = "[TARGET]"):
         return prompt.replace(placeholder, replacement)
-
-    def _nearest_aspect_ratio(self, image: torch.Tensor, aspect_ratios: list[str] = ASPECT_RATIOS) -> str:
-        return min(
-            aspect_ratios,
-            key=lambda x: abs(image.shape[-1] / image.shape[-2] - int(x.split(":")[0]) / int(x.split(":")[1])),
-        )
-
-    def _crop_image_to_aspect_ratio(
-        self,
-        image: torch.Tensor,
-        aspect_ratios: list[str] = ASPECT_RATIOS,
-    ) -> tuple[torch.Tensor, tuple[int]]:
-        # ---------------- Reshape to aspect ---------------- #
-        aspect = self._nearest_aspect_ratio(image, aspect_ratios)
-        aspect_ratio = int(aspect.split(":")[0]) / int(aspect.split(":")[1])
-        org_h, org_w = image.shape[-2:]
-        org_aspect = org_w / org_h
-        h, w = (org_h, int(org_h * aspect_ratio)) if org_aspect > aspect_ratio else (int(org_w / aspect_ratio), org_w)
-        image = T.center_crop(image, [h, w])
-        return image, aspect_ratio
-
-    def _reshape_to_divisible_max_resolution(self, image: torch.Tensor, aspect_ratio: float | None = None):
-        aspect_ratio = aspect_ratio or image.shape[-1] / image.shape[-2]
-        # ------------- Reshape to max resolution ------------- #
-        max_h = int(math.sqrt(self.max_resolution / aspect_ratio))
-        max_w = int(math.sqrt(self.max_resolution * aspect_ratio))
-        max_h = max_h // self.divisible_by * self.divisible_by
-        max_w = max_w // self.divisible_by * self.divisible_by
-        image = T.resize(image, [max_h, max_w])
-        return image
 
     def _preprocess_prompt(self, prompt, **kwargs) -> str:
         if self.enable_prompt_truncation:
@@ -83,13 +50,18 @@ class MaskEditDataset(SchemaDataset):
         target = sample["target"]
         image_name = Path(target).stem
 
-        conditions: list[torch.Tensor] = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
         target: torch.Tensor = self._load_image_tensor(os.path.join(self.image_root, target))
 
         # Reshape conditions and target
-        target, aspect_ratio = self._crop_image_to_aspect_ratio(target, ASPECT_RATIOS)
-        target = self._reshape_to_divisible_max_resolution(target, aspect_ratio)
-        conditions = [self._reshape_to_divisible_max_resolution(c, aspect_ratio) for c in conditions]
+        target, aspect_ratio = crop_image_to_aspect_ratio(target)
+        target = reshape_to_divisible_max_resolution(target, aspect_ratio)
+
+        if isinstance(conditions, dict):
+            conditions = {k: self._load_image_tensor(os.path.join(self.image_root, c)) for k, c in conditions.items()}
+            conditions = {k: reshape_to_divisible_max_resolution(c, aspect_ratio) for k, c in conditions.items()}
+        else:
+            conditions = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
+            conditions = [reshape_to_divisible_max_resolution(c, aspect_ratio) for c in conditions]
 
         return {
             "image_name": image_name,
