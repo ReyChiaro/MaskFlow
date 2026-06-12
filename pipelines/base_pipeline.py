@@ -1,4 +1,3 @@
-import copy
 import torch
 import dataclasses
 
@@ -11,12 +10,41 @@ from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
 
 from loguru import logger
 from PIL import Image
-from typing import Any
+from typing import Any, Iterable
 
 from utils.summary import summarize_model
-from pipelines.utils import get_nested_attr, set_nested_attr
+from pipelines.utils import get_nested_attr
 from trainer.parallel.handler import parallel_handler
 from trainer.parallel.fsdp_strategy import FSDPStrategy
+
+
+@dataclasses.dataclass
+class PreprocessOutput:
+
+    prompt: str | list[str] | None = None
+    negative_prompt: str | list[str] | None = None
+    vlm_conditions: list[torch.Tensor] | dict[str, torch.Tensor] | None = None
+    dit_conditions: list[torch.Tensor] | dict[str, torch.Tensor] | None = None
+    target: torch.Tensor | None = None
+
+
+@dataclasses.dataclass
+class ForwardOutput:
+
+    prompt_embeds: torch.Tensor
+    prompt_embeds_mask: torch.Tensor
+
+    height: int
+    width: int
+
+    noise: torch.Tensor | None = None
+    noised_target: torch.Tensor | None = None
+    timesteps: torch.Tensor | None = None
+    sigmas: torch.Tensor | None = None
+    ground_truth: torch.Tensor | None = None
+    conditions: list[torch.Tensor] | None = None
+    negative_prompt_embeds: torch.Tensor | None = None
+    negative_prompt_embeds_mask: torch.Tensor | None = None
 
 
 @dataclasses.dataclass
@@ -24,6 +52,7 @@ class BasePipeline:
     r"""
     Base pipeline for diffusers for training and evaluation.
     Usually includes following components:
+
     - vae
     - text_pipeline
         - text_encoder
@@ -52,7 +81,9 @@ class BasePipeline:
     transformer: ModelMixin | PeftAdapterMixin = dataclasses.field(init=None)
     scheduler: SchedulerMixin = dataclasses.field(init=None)
     fsdp_configs: dict | None = None
-    fsdp_modules: list | None = None
+
+    # _fsdp_modules: list | None = None
+    _fsdp_module_configs: list[dict] | None = None
 
     @property
     def summary(self) -> dict[str, dict[str, int | float]]:
@@ -64,21 +95,36 @@ class BasePipeline:
 
     @property
     def fsdp_module_configs(self) -> list[dict[str, Any]]:
-        if self.fsdp_configs is not None:
-            module_configs = []
-            for module_name, configs in self.fsdp_configs.items():
-                module = get_nested_attr(self, module_name)
-                is_iterable = configs.pop("iterable", False)
-                if is_iterable:
-                    module_configs.extend([{"module": m, "configs": configs} for m in module])
-                else:
-                    module_configs.append({"module": module, "configs": configs})
-            return module_configs
-        return []
+        if self._fsdp_module_configs is None:
+            self._fsdp_module_configs = []
+            if self.fsdp_configs is not None:
+                module_configs = []
+                for module_name, configs in self.fsdp_configs.items():
+                    module = get_nested_attr(self, module_name)
+                    # is_iterable = configs.pop("iterable", False)
+                    if isinstance(module, Iterable):
+                        for i, m in enumerate(module):
+                            # module_configs.extend([{"module": m, "configs": configs} for m in module])
+                            module_configs.append({"name": f"{module_name}.{i}", "module": m, "configs": configs})
+                    else:
+                        # module_configs.append({"module": module, "configs": configs})
+                        module_configs.append({"name": module_name, "module": module, "configs": configs})
+                self._fsdp_module_configs = module_configs
+        return self._fsdp_module_configs
 
     @property
     def trainable_params(self) -> list[torch.Tensor]:
-        pass
+        r"""
+        Return the trainable params list of tensors.
+        """
+        params = []
+        for m in [self.vae, getattr(self.text_pipeline, "text_encoder", None), self.transformer]:
+            if m is None:
+                continue
+            for p in m.parameters():
+                if p.requires_grad:
+                    params.append(p)
+        return params
 
     def setup_fsdp_modules(self, fsdp_strategy: FSDPStrategy, device: torch.device, dtype: torch.dtype):
         # VAE: Full parameters to all devices
@@ -92,52 +138,52 @@ class BasePipeline:
         mesh = parallel_handler.get_device_mesh(fsdp_strategy)
 
         if FSDPStrategy.is_no_shard(fsdp_strategy):
+            # Whole modules will be loaded into each device.
             if self.fsdp_configs is not None:
                 logger.warning(f"FSDPStrategy is {fsdp_strategy}, fsdp_configs will be ignored.")
 
             self.text_pipeline.to(device, dtype=dtype)
             self.transformer.to(device, dtype=dtype)
 
-            self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
+            # self._fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
 
         elif FSDPStrategy.is_full_shard(fsdp_strategy):
             assert self.fsdp_configs is not None, f"FSDPStrategy is {fsdp_strategy}, but fsdp_configs are not given."
-            module_configs = []
-            for module_name, raw_configs in self.fsdp_configs.items():
-                configs: dict[str, Any] = copy.deepcopy(raw_configs)
+            # module_configs = []
+            # for module_name, raw_configs in self._fsdp_module_configs:
+            #     configs: dict[str, Any] = copy.deepcopy(raw_configs)
 
-                is_iterable = configs.pop("iterable", False)
-                reshard_after_forward = configs.pop("reshard_after_forward", True)
+            #     # is_iterable = configs.pop("iterable", False)
+            #     reshard_after_forward = configs.pop("reshard_after_forward", True)
 
-                module = get_nested_attr(self, module_name)
+            #     module = get_nested_attr(self, module_name)
 
-                if is_iterable:
-                    for submodule in module:
-                        module_configs.append((None, submodule, configs))
-                else:
-                    module_configs.append((module_name, module, configs))
+            #     if is_iterable:
+            #         for submodule in module:
+            #             module_configs.append((None, submodule, configs))
+            #     else:
+            #         module_configs.append((module_name, module, configs))
 
-            for module_name, module, configs in module_configs:
-                fsdp_kwargs = dict(
-                    mesh=mesh,
-                    mp_policy=mp_policy,
-                    reshard_after_forward=reshard_after_forward,
-                    **configs,
-                )
-                wrapped = fully_shard(module, **fsdp_kwargs)
-                if module_name is not None:
-                    set_nested_attr(self, module_name, wrapped)
+            for module_configs in self._fsdp_module_configs:
+                # module_name = module_configs["module_name"]
+                module = module_configs["module"]
+                configs = module_configs["configs"]
+                fsdp_kwargs = dict(mesh=mesh, mp_policy=mp_policy, **configs)
+                # In-place
+                fully_shard(module, **fsdp_kwargs)
+                # if module_name is not None:
+                #     set_nested_attr(self, module_name, wrapped)
 
-            self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
+            # self._fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
         else:
             logger.warning(f"Unsupported FSDPStrategy: {fsdp_strategy}.")
         return self
 
-    def forward_step(self, batch):
+    def forward_step(self, batch, **kwargs):
         pass
 
     @torch.inference_mode()
-    def eval_step(self, batch, global_step, num_inference_steps: int = 50, cfg_scale: float = 0.0):
+    def eval_step(self, batch, num_inference_steps: int = 50, cfg_scale: float = 0.0, **kwargs):
         pass
 
     @torch.inference_mode()

@@ -1,4 +1,5 @@
 import os
+import json
 import math
 import random
 import numpy as np
@@ -246,9 +247,9 @@ class BaseTrainer:
         self.current_epoch = 0
         self.global_step = 0
         self.micro_step = 0
-        self.num_epochs = math.ceil(
-            self.max_training_steps * self.gradient_accumulation_steps / max(len(self.train_loader), 1)
-        ) + 1
+        self.num_epochs = (
+            math.ceil(self.max_training_steps * self.gradient_accumulation_steps / max(len(self.train_loader), 1)) + 1
+        )
 
         if self.resume_from is not None and os.path.exists(self.resume_from):
             self.load_checkpoints(self.resume_from)
@@ -511,17 +512,40 @@ class BaseTrainer:
         wait_for_everyone()
 
         for step, batch in enumerate(self.eval_loader):
-            output = self.pipe.eval_step(batch, global_step, self.num_inference_steps, self.cfg_scale)
+            output = self.pipe.eval_step(batch, self.num_inference_steps, self.cfg_scale)
 
+            # -------- Try to save the evaluation results -------- #
             if not isinstance(output, (tuple, list)):
                 output = [output]
 
-            conditions = batch["conditions"]
-            target = batch["target"]
-            image_names = batch["image_name"]
+            prompt: list[str] = batch.get("prompt", "")
+            neg_prompt = batch.get("negative_prompt", "")
+            conditions = batch.get("conditions", None)
+            target = batch.get("target", None)
+            image_name = batch.get("image_name", None)
 
-            for batch_idx, image_name in enumerate(image_names):
-                tensors = [*[c[batch_idx] for c in conditions], target[batch_idx], *[o[batch_idx] for o in output]]
+            for batch_idx in range(len(prompt)):
+                tensors = []
+
+                if conditions is not None:
+                    if isinstance(conditions, dict):
+                        conditions = [c for c in conditions.values()]
+                    if not isinstance(conditions, (tuple, list)):
+                        conditions = [conditions]
+
+                    tensors.extend([*[c[batch_idx] for c in conditions]])
+
+                if target is not None:
+                    tensors.append(target[batch_idx])
+
+                tensors.extend([*[o[batch_idx] for o in output]])
+                p = prompt[batch_idx]
+                np = neg_prompt[batch_idx]
+
+                save_name = f"batch_{batch_idx}"
+                if image_name is not None:
+                    save_name = image_name[batch_idx]
+
                 max_h = max([t.shape[-2] for t in tensors])
                 tensors = [
                     F.pad(
@@ -533,9 +557,15 @@ class BaseTrainer:
                     for t in tensors
                 ]
                 tensors = torch.cat(tensors, dim=-1)
-                save_path = os.path.join(save_dir, f"{image_name}.jpg")
+
+                save_path = os.path.join(save_dir, f"{save_name}.jpg")
                 save_image(tensors, save_path)
-                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {image_name}")
+
+                with open(os.path.join(save_dir, "prompt.jsonl"), "a") as f:
+                    f.write(json.dumps({"prompt": p, "negative_prompt": np}) + "\n")
+
+                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {save_name}")
+
         if self.is_main_process:
             logger.info(f"Evaluation finished, saved to {save_dir}.")
         wait_for_everyone()

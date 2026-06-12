@@ -10,7 +10,7 @@ eval_data_configs: ${evalset}
 lora_configs: ${adapter}
 
 base_seed: 42
-resume_from: ""
+resume_from: null
 
 cfg_scale: 1.0
 num_inference_steps: 50
