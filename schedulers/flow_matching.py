@@ -65,22 +65,16 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
             sigmas = sigmas.unsqueeze(-1)
 
         xt = (1.0 - sigmas) * x0.float() + sigmas * noise.float()
-        return xt.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
+        return xt.to(device, dtype=dtype), sigmas.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
 
     def get_velocity(self, noise: torch.Tensor, x0: torch.Tensor):
         return noise - x0
 
-    def step(self, xt: torch.Tensor, vt: torch.Tensor, delta_t: torch.Tensor):
-        return xt + delta_t * vt
+    def step(self, xt: torch.Tensor, vt: torch.Tensor, curr_sigma: torch.Tensor, next_sigma: torch.Tensor):
+        return xt + (next_sigma - curr_sigma) * vt
 
-    def _inference(self, xt: torch.Tensor, num_inference_steps: int, img_seq_len: int | None = None):
-        @dataclasses.dataclass
-        class _Inferencer:
-            pred_v: torch.Tensor = dataclasses.field(init=None)
-
-            def step(self, v):
-                self.pred_v = v
-
+    @contextmanager
+    def inference(self, num_inference_steps: int, img_seq_len: int | None = None):
         if self.use_dynamic_shifting:
             mu = self.calculate_shift_mu(img_seq_len)
         else:
@@ -91,21 +85,46 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
         ).float()
         sigmas = self.time_shift(timesteps, mu).float()
         sigmas = torch.cat([sigmas, torch.zeros((1,))])
-        for step in range(num_inference_steps + 1):
-            inferencer = _Inferencer()
-            try:
-                yield xt, sigmas[step : step + 1], inferencer
-            finally:
-                if step >= num_inference_steps:
-                    continue
-                sigma = sigmas[step]
-                sigma_next = sigmas[step + 1]
-                xt = self.step(xt.float(), inferencer.pred_v, sigma_next - sigma).to(xt.device, dtype=xt.dtype)
 
-    @contextmanager
-    def inference_sampler(self, xt: torch.Tensor, num_inference_steps: int, img_seq_len: int | None = None):
-        inference_it = self._inference(xt, num_inference_steps, img_seq_len)
-        try:
-            yield inference_it
-        finally:
-            inference_it.close()
+        for step in range(num_inference_steps):
+            timestep = timesteps[step]
+            curr_sigma = sigmas[step]
+            next_sigma = sigmas[step + 1]
+            yield timestep, curr_sigma, next_sigma
+
+    # def _inference(self, xt: torch.Tensor, num_inference_steps: int, img_seq_len: int | None = None):
+    #     @dataclasses.dataclass
+    #     class _Inferencer:
+    #         pred_v: torch.Tensor = dataclasses.field(init=None)
+
+    #         def step(self, v):
+    #             self.pred_v = v
+
+    #     if self.use_dynamic_shifting:
+    #         mu = self.calculate_shift_mu(img_seq_len)
+    #     else:
+    #         mu = self.shift_mu
+
+    #     timesteps = torch.from_numpy(
+    #         np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps, endpoint=True)
+    #     ).float()
+    #     sigmas = self.time_shift(timesteps, mu).float()
+    #     sigmas = torch.cat([sigmas, torch.zeros((1,))])
+    #     for step in range(num_inference_steps + 1):
+    #         inferencer = _Inferencer()
+    #         try:
+    #             yield xt, sigmas[step : step + 1], inferencer
+    #         finally:
+    #             if step >= num_inference_steps:
+    #                 continue
+    #             sigma = sigmas[step]
+    #             sigma_next = sigmas[step + 1]
+    #             xt = self.step(xt.float(), inferencer.pred_v, sigma_next - sigma).to(xt.device, dtype=xt.dtype)
+
+    # @contextmanager
+    # def inference_sampler(self, xt: torch.Tensor, num_inference_steps: int, img_seq_len: int | None = None):
+    #     inference_it = self._inference(xt, num_inference_steps, img_seq_len)
+    #     try:
+    #         yield inference_it
+    #     finally:
+    #         inference_it.close()

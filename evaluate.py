@@ -37,54 +37,59 @@ def evaluate(cfgs: OmegaConf):
     pipe: QwenImageMaskFlow = instantiate(cfgs.pipe_configs, device=device, generator=generator, dtype=dtype)
     pipe.transformer.requires_grad_(False)
 
-    safetensors_dir = cfgs.resume_from
-    if getattr(cfgs, "is_fsdp_checkpoint", False):
-        import peft
-        import torch.distributed.checkpoint as DCP
-        from torch.distributed.checkpoint.state_dict import get_model_state_dict, set_model_state_dict, StateDictOptions
+    if cfgs.resume_from is not None and Path(cfgs.resume_from).exists():
+        safetensors_dir = cfgs.resume_from
+        if getattr(cfgs, "is_fsdp_checkpoint", False):
+            import peft
+            import torch.distributed.checkpoint as DCP
+            from torch.distributed.checkpoint.state_dict import (
+                get_model_state_dict,
+                set_model_state_dict,
+                StateDictOptions,
+            )
 
-        lora_configs = peft.LoraConfig(
-            r=cfgs.adapter.r,
-            lora_alpha=cfgs.adapter.lora_alpha,
-            lora_dropout=cfgs.adapter.lora_dropout,
-            bias="none",
-            target_modules=list(cfgs.adapter.target_modules),
-        )
-        pipe.transformer.add_adapter(lora_configs, adapter_name=cfgs.adapter.adapter_name)
-        pipe.transformer.set_adapter(cfgs.adapter.adapter_name)
+            lora_configs = peft.LoraConfig(
+                r=cfgs.adapter.r,
+                lora_alpha=cfgs.adapter.lora_alpha,
+                lora_dropout=cfgs.adapter.lora_dropout,
+                bias="none",
+                target_modules=list(cfgs.adapter.target_modules),
+            )
+            pipe.transformer.add_adapter(lora_configs, adapter_name=cfgs.adapter.adapter_name)
+            pipe.transformer.set_adapter(cfgs.adapter.adapter_name)
 
-        for n, p in pipe.transformer.named_parameters():
-            if cfgs.adapter.adapter_name in n and "lora_" in n:
-                p.requires_grad_(True)
+            for n, p in pipe.transformer.named_parameters():
+                if cfgs.adapter.adapter_name in n and "lora_" in n:
+                    p.requires_grad_(True)
 
-        transformer_states = get_model_state_dict(
-            pipe.transformer,
-            options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True),
-        )
-        DCP.load({"model": transformer_states}, checkpoint_id=str(cfgs.resume_from))
-        set_model_state_dict(
-            pipe.transformer,
-            transformer_states,
-            options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True, strict=False),
-        )
+            transformer_states = get_model_state_dict(
+                pipe.transformer,
+                options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True),
+            )
+            DCP.load({"model": transformer_states}, checkpoint_id=str(cfgs.resume_from))
+            set_model_state_dict(
+                pipe.transformer,
+                transformer_states,
+                options=StateDictOptions(full_state_dict=False, ignore_frozen_params=True, strict=False),
+            )
 
-        safetensors_dir = Path(getattr(cfgs, "lora_safetensors_dir", f"{cfgs.resume_from}/lora_adapter"))
-        safetensors_dir.mkdir(exist_ok=True, parents=True)
-        pipe.transformer.save_lora_adapter(
+            safetensors_dir = Path(getattr(cfgs, "lora_safetensors_dir", f"{cfgs.resume_from}/lora_adapter"))
+            safetensors_dir.mkdir(exist_ok=True, parents=True)
+            pipe.transformer.save_lora_adapter(
+                safetensors_dir,
+                adapter_name=cfgs.adapter.adapter_name,
+                safe_serialization=True,
+            )
+            pipe.transformer.delete_adapters(cfgs.adapter.adapter_name)
+            logger.info(f"Converted FSDP checkpoint {cfgs.resume_from} to LoRA safetensors at {safetensors_dir}.")
+
+        pipe.transformer.load_lora_adapter(
             safetensors_dir,
+            prefix=None,
             adapter_name=cfgs.adapter.adapter_name,
-            safe_serialization=True,
+            use_safetensors=True,
         )
-        pipe.transformer.delete_adapters(cfgs.adapter.adapter_name)
-        logger.info(f"Converted FSDP checkpoint {cfgs.resume_from} to LoRA safetensors at {safetensors_dir}.")
-
-    pipe.transformer.load_lora_adapter(
-        safetensors_dir,
-        prefix=None,
-        adapter_name=cfgs.adapter.adapter_name,
-        use_safetensors=True,
-    )
-    pipe.transformer.set_adapter(cfgs.adapter.adapter_name)
+        pipe.transformer.set_adapter(cfgs.adapter.adapter_name)
     pipe.transformer.requires_grad_(False)
 
     dataset: MaskEditDataset = instantiate(cfgs.evalset)
