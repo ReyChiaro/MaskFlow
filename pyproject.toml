@@ -13,6 +13,7 @@ dependencies = [
     "prodigyopt>=1.1.2",
     "tensorboard>=2.20.0",
     "torch>=2.11.0",
+    "torchmetrics>=1.9.0",
     "torchvision>=0.26.0",
     "transformers>=5.6.2",
     "wandb>=0.26.1",

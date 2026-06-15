@@ -39,6 +39,7 @@ def evaluate(cfgs: OmegaConf):
 
     if cfgs.resume_from is not None and Path(cfgs.resume_from).exists():
         safetensors_dir = cfgs.resume_from
+        # If the provided checkpoint is FSDP, we will convert it to safetensors for convenient usage.
         if getattr(cfgs, "is_fsdp_checkpoint", False):
             import peft
             import torch.distributed.checkpoint as DCP
@@ -94,7 +95,7 @@ def evaluate(cfgs: OmegaConf):
 
     dataset: MaskEditDataset = instantiate(cfgs.evalset)
 
-    prefix = "c_"
+    concat_prefix = "c_"
     for i, sample in tqdm(enumerate(dataset), desc="Eval", total=len(dataset)):
         if i >= len(dataset):
             logger.info(f"Evaluation Finished.")
@@ -124,7 +125,7 @@ def evaluate(cfgs: OmegaConf):
         )
 
         output = output_dict["output"]
-        output.save(evaluate_dir / f"{image_name}.png")
+        output.save(evaluate_dir / f"{image_name}.jpg")
 
         # Concat and Save
         if target is None:
@@ -172,10 +173,8 @@ def evaluate(cfgs: OmegaConf):
             0.3 * colorred_mask2 + 0.7 * output,
             colorred_output,
         )
-
         row2 = torch.cat([colorred_source, mask, processed_mask, colorred_target, colorred_output], dim=-1)
-
-        save_image(torch.cat([row1, row2], dim=1), evaluate_dir / f"{prefix}{image_name}.png")
+        save_image(torch.cat([row1, row2], dim=1), evaluate_dir / f"{concat_prefix}{image_name}.jpg")
 
 
 if __name__ == "__main__":
