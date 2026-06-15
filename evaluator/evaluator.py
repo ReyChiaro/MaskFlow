@@ -24,8 +24,16 @@ class Evaluator:
             targets
         ), f"Given sources ({len(sources)}) and targets ({len(targets)}) should contain same num of items."
 
+        sources = sources.to(self.device)
+        targets = targets.to(self.device)
+        kwargs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in kwargs.items()}
+        has_mask = kwargs.get("mask") is not None
+
         results = {}
         for metric_name, metric_fn in self.metrics.items():
+            if metric_name.endswith(("-FG", "-BG")) and not has_mask:
+                logger.info(f"Skip {metric_name}: mask is not provided.")
+                continue
             logger.info(f"Evaluate {metric_name}")
             result: float = metric_fn(sources, targets, **kwargs)
             results[metric_name] = result
