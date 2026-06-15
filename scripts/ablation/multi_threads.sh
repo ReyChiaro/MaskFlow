@@ -1,11 +1,11 @@
 # ==========================================
 # 1. Global Augments
 # ==========================================
-GPUS=(0)
+GPUS=(0 1 2)
 NUM_GPUS=${#GPUS[@]}
 BASE_PORT=29800
 
-BASE_MODEL="/data/nvme7/models/Qwen-Image-Edit-2511"
+BASE_MODEL="Qwen/Qwen-Image-Edit-2511"
 OUTPUT_ROOT="ablations"
 IMAGE_ROOT="dataset/MaskEdit/scene"
 
@@ -35,18 +35,20 @@ run_base_experiment() {
         "pipeline.mask_loss_weight=0"
         "pipeline.edge_loss_weight=0"
         "pipeline.enable_vae_mask_encoding=true"
-        "pipeline.inpainting_denoising_steps=45"
+        "pipeline.enable_masked_loss=true"
+        "pipeline.inpainting_denoising_steps=50" # Inference only
+        "pipeline.scheduler.unmask_with=noisy_source"
         "adapter=lora"
         "adapter.r=256"
         "adapter.lora_alpha=256"
         "adapter.adapter_name=mask_flow"
         "trainer=lora"
         "trainer.enable_save_optimizer=true"
-        "trainer.base_seed=42"
+        "trainer.base_seed=304"
         "trainer.cfg_scale=4.0"
-        "trainer.max_training_steps=10000"
-        "trainer.save_steps=100"
-        "trainer.eval_steps=50"
+        "trainer.max_training_steps=5000"
+        "trainer.save_steps=500"
+        "trainer.eval_steps=2500"
         "trainer.mixed_precision=bf16"
         "trainer.enable_gradient_checkpoint=true"
         "trainer.gradient_accumulation_steps=1"
@@ -78,7 +80,7 @@ run_base_experiment() {
     --nproc-per-node 1 \
     --master-addr "127.0.0.1" \
     --master-port $master_port \
-    main.py \
+    finetune.py \
     --config-path configs \
     --config-name train \
     "${base_args[@]}" "${extra_args[@]}" >> "$log_file" 2>&1
@@ -88,12 +90,27 @@ run_base_experiment() {
 # 2. Experiments
 # ==========================================
 EXPERIMENTS=(
-    "baseline|"
-    "abl_loss-mask0.1_edge0.0|loss.mask_loss_weight=0.1,loss.edge_loss_weight=0"
-    "abl_loss-mask0.5_edge0.0|loss.mask_loss_weight=0.5,loss.edge_loss_weight=0"
-    "abl_loss-mask1.0_edge0.0|loss.mask_loss_weight=1.0,loss.edge_loss_weight=0"
-    "abl_loss-mask2.0_edge0.0|loss.mask_loss_weight=2.0,loss.edge_loss_weight=0"
-    "abl_loss-mask5.0_edge0.0|loss.mask_loss_weight=5.0,loss.edge_loss_weight=0"
+    "baseline|pipeline.enable_masked_loss=false"
+    "mf_loss|"
+    "mf_loss-mask1.0_edge0|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.0"
+    "mf_loss-mask0_edge1.0|pipeline.mask_loss_weight=0.0,pipeline.edge_loss_weight=1.0"
+
+    "mf_loss-mask0.5_edge0|pipeline.mask_loss_weight=0.5,pipeline.edge_loss_weight=0"
+    "mf_loss-mask2.0_edge0|pipeline.mask_loss_weight=2.0,pipeline.edge_loss_weight=0"
+
+    "mf_loss-mask0_edge0.5|pipeline.mask_loss_weight=0,pipeline.edge_loss_weight=0.5"
+    "mf_loss-mask0_edge2.0|pipeline.mask_loss_weight=0,pipeline.edge_loss_weight=2.0"
+
+    "mf_loss-mask0.5_edge0.5|pipeline.mask_loss_weight=0.5,pipeline.edge_loss_weight=0.5"
+    "mf_loss-mask0.5_edge1.0|pipeline.mask_loss_weight=0.5,pipeline.edge_loss_weight=1.0"
+    "mf_loss-mask1.0_edge0.5|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.5"
+    "mf_loss-mask1.0_edge1.0|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=1.0"
+
+    "mf_mask-dila0|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.0,pipeline.mask_dilation_kernel=0"
+    "mf_mask-dila75|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.0,pipeline.mask_dilation_kernel=75"
+
+    "mf_mask-blur0|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.0,pipeline.mask_blur_kernel=0"
+    "mf_mask-blur75|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.0,pipeline.mask_blur_kernel=75"
 )
 
 TOTAL_EXPS=${#EXPERIMENTS[@]}
