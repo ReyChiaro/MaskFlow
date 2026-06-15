@@ -61,7 +61,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     edge_loss_weight: float = 0.0
 
     enable_vae_mask_encoding: bool = True
-    enable_inpainting_denoise: bool = True
+    # enable_inpainting_denoise: bool = True
+    inpainting_denoising_steps: int | float = 1.0
 
     # ---------------- Mask Operations ---------------- #
     def dilate_mask(self, mask: torch.Tensor, ks: int | None = None) -> torch.Tensor:
@@ -351,6 +352,17 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     ) -> dict[str, torch.Tensor]:
         r"""
         Compute loss with masks and edges.
+
+        Args
+            predictions   (Tensor): The model predicted vector fields.
+            ground_truths (Tensor): The ground truth vector fields.
+            mask_ratio    (Tensor): Masked area / image area.
+                Used to zoom the masked loss weights adaptively during training.
+            mask_latents  (Tensor): The reshaped/VAE encoded softened binary masks.
+            edge_latents  (Tensor): The reshaped/VAE encoded softened binary edges.
+
+        Return
+            dict[str, Tensor]: The dict of different types losses.
         """
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         loss = None
@@ -367,16 +379,15 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             loss = mask_loss if loss is None else loss + mask_loss
 
         if edge_latents is not None and self.edge_loss_weight > 0:
-            # edge_field = self.edge_loss_weight * edge * loss_field
-            # edge_loss = (edge_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
-            # loss_dict["edge_loss"] = edge_loss
-            # loss_dict["loss"] = loss_dict["loss"] + edge_loss
-            pass
+            edge_field = self.edge_loss_weight * edge_latents * loss_field
+            edge_loss = (edge_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+            loss_dict["edge_loss"] = edge_loss
+            loss = edge_loss if loss is None else loss + edge_loss
 
         if loss is None:
             loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
-        loss_dict["loss"] = loss
 
+        loss_dict["loss"] = loss
         return loss_dict
 
     def forward_step(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -408,10 +419,15 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         source = model_inputs.conditions[0]
         mask = model_inputs.mask_latents
         noise = copy.deepcopy(model_inputs.noise)
+        inpainting_denoising_steps = (
+            self.inpainting_denoising_steps
+            if isinstance(self.inpainting_denoising_steps, int)
+            else math.floor(self.inpainting_denoising_steps * num_inference_steps)
+        )
 
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
             # with self.scheduler.inference_sampler(xt, num_inference_steps, source, mask_latents, xt.shape[1]) as sampler:
-            for (t, curr_sigma, next_sigma) in tqdm(inferencer, total=num_inference_steps):
+            for t, curr_sigma, next_sigma in tqdm(inferencer, total=num_inference_steps):
                 hidden_states = torch.cat([xt] + [c for c in model_inputs.conditions], dim=1)
                 timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
 
@@ -440,7 +456,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
                     pred = (pred_norm / cfg_norm) * cfg_pred
 
-                if self.enable_inpainting_denoise:
+                enable_inpainting_denoise = t < inpainting_denoising_steps
+                if enable_inpainting_denoise:
                     xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, mask, noise)
                 else:
                     xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma)

@@ -25,6 +25,8 @@ scripts/utils/*
 !scripts/utils/split_eval_data.py
 dataset/
 deprecated/
+multi_threads_logs/
+ablations/
 _test*.py
 *.jsonl
 *.json
