@@ -7,7 +7,7 @@ from loguru import logger
 
 
 @hydra.main(config_path="configs", config_name="train", version_base="v1.2")
-def main(cfgs: OmegaConf):
+def finetune(cfgs: OmegaConf):
     cfg_contents = "\n" + " Configs ".center(50, "=")
     cfg_contents += "\n" + OmegaConf.to_yaml(cfgs)
     cfg_contents += "\n" + "=" * 50
@@ -18,4 +18,4 @@ def main(cfgs: OmegaConf):
 
 
 if __name__ == "__main__":
-    main()
+    finetune()
