@@ -13,6 +13,7 @@ mask_loss_weight: 0.5
 edge_loss_weight: 0.0
 
 enable_vae_mask_encoding: true
+enable_masked_loss: true
 inpainting_denoising_steps: 45
 
 fsdp_configs:

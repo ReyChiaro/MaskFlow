@@ -61,6 +61,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     edge_loss_weight: float = 0.0
 
     enable_vae_mask_encoding: bool = True
+    enable_masked_loss: bool = True
     # enable_inpainting_denoise: bool = True
     inpainting_denoising_steps: int | float = 1.0
 
@@ -368,21 +369,22 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         loss = None
         loss_dict = {}
 
-        if mask_latents is not None:
-            mask_field = mask_latents * loss_field
-            if mask_ratio is not None and self.mask_loss_weight > 0:
-                mask_field = self.mask_loss_weight * (1.0 / (mask_ratio + 1e-6)) * mask_field
-                loss_dict["mask_ratio"] = mask_ratio.mean()
+        if self.enable_masked_loss:
+            if mask_latents is not None:
+                mask_field = mask_latents * loss_field
+                if mask_ratio is not None and self.mask_loss_weight > 0:
+                    mask_field = self.mask_loss_weight * (1.0 / (mask_ratio + 1e-6)) * mask_field
+                    loss_dict["mask_ratio"] = mask_ratio.mean()
 
-            mask_loss = (mask_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
-            loss_dict["mask_loss"] = mask_loss
-            loss = mask_loss if loss is None else loss + mask_loss
+                mask_loss = (mask_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+                loss_dict["mask_loss"] = mask_loss
+                loss = mask_loss if loss is None else loss + mask_loss
 
-        if edge_latents is not None and self.edge_loss_weight > 0:
-            edge_field = self.edge_loss_weight * edge_latents * loss_field
-            edge_loss = (edge_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
-            loss_dict["edge_loss"] = edge_loss
-            loss = edge_loss if loss is None else loss + edge_loss
+            if edge_latents is not None and self.edge_loss_weight > 0:
+                edge_field = self.edge_loss_weight * edge_latents * loss_field
+                edge_loss = (edge_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
+                loss_dict["edge_loss"] = edge_loss
+                loss = edge_loss if loss is None else loss + edge_loss
 
         if loss is None:
             loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
@@ -442,7 +444,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
                 # Do CFG
                 if cfg_scale > 1.0 and model_inputs.negative_prompt_embeds is not None:
-                    logger.info(f"Doing CFG")
                     neg_pred = self.denoise(
                         hidden_states=hidden_states,
                         timesteps=timestep,
