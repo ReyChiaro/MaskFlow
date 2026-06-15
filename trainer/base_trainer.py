@@ -517,34 +517,25 @@ class BaseTrainer:
         wait_for_everyone()
 
         for step, batch in enumerate(self.eval_loader):
-            output = self.pipe.eval_step(batch, self.num_inference_steps, self.cfg_scale)
+            output: dict[str, torch.Tensor] = self.pipe.eval_step(batch, self.num_inference_steps, self.cfg_scale)
 
             # -------- Try to save the evaluation results -------- #
-            if not isinstance(output, (tuple, list)):
-                output = [output]
-
             prompt: list[str] = batch.get("prompt", "")
-            neg_prompt = batch.get("negative_prompt", "")
-            conditions = batch.get("conditions", None)
-            target = batch.get("target", None)
+            neg_prompt: list[str] = batch.get("negative_prompt", "")
+            conditions: dict[str, torch.Tensor] | None = batch.get("conditions", None)
+            target: torch.Tensor | None = batch.get("target", None)
             image_name = batch.get("image_name", None)
-
-            if conditions is not None:
-                if isinstance(conditions, dict):
-                    conditions = [c for c in conditions.values()]
-                if not isinstance(conditions, (tuple, list)):
-                    conditions = [conditions]
 
             for batch_idx in range(len(prompt)):
                 tensors = []
 
                 if conditions is not None:
-                    tensors.extend([*[c[batch_idx] for c in conditions]])
+                    tensors.extend([conditions[k][batch_idx] for k in conditions])
 
                 if target is not None:
                     tensors.append(target[batch_idx])
 
-                tensors.extend([*[o[batch_idx] for o in output]])
+                tensors.extend([output[k][batch_idx] for k in output])
                 p = prompt[batch_idx]
                 np = neg_prompt[batch_idx]
 

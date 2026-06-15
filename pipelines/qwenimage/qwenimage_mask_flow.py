@@ -466,7 +466,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
         )
         output = self.decode_image(output)
-        return [preprocessed_data.mask, preprocessed_data.edge, output]
+        return {"mask": preprocessed_data.mask, "edge": preprocessed_data.edge, "output": output}
 
     @torch.inference_mode()
     def generate(
@@ -509,10 +509,12 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 image = [image]
 
             if len(image) > 1 and mask is not None:
-                logger.warning(f"Mask is provided but find multiple images are provided. \
+                logger.warning(
+                    f"Mask is provided but find multiple images are provided. \
                     If you want to use MaskFlow image edit, provide ONE image \
                     that you want to edit and the mask instead, otherwise the \
-                    mask will be ignored.")
+                    mask will be ignored."
+                )
 
                 image = [image[0]]
 
