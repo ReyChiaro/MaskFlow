@@ -6,7 +6,6 @@ from typing import Any
 import hydra
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from hydra.utils import instantiate
 from loguru import logger
@@ -103,38 +102,17 @@ def _load_lora_adapter(pipe: BasePipeline, cfgs: OmegaConf):
     logger.info(f"Loaded LoRA adapter '{adapter_name}' from {safetensors_dir}.")
 
 
-def _normalize_outputs(output: Any) -> tuple[list[str], list[torch.Tensor]]:
-    if isinstance(output, torch.Tensor):
-        return ["output"], [output]
+def _normalize_outputs(output: Any) -> dict[str, torch.Tensor]:
+    if not isinstance(output, dict):
+        raise TypeError(f"eval_step must return dict[str, Tensor], got {type(output)}.")
 
-    if isinstance(output, dict):
-        names, tensors = [], []
-        for name, value in output.items():
-            if isinstance(value, torch.Tensor):
-                names.append(str(name))
-                tensors.append(value)
-        return names, tensors
-
-    if isinstance(output, (tuple, list)):
-        tensors = [value for value in output if isinstance(value, torch.Tensor)]
-        names = [f"output_{idx}" for idx in range(len(tensors))]
-        if tensors:
-            names[-1] = "output"
-        return names, tensors
-
-    raise TypeError(f"Unsupported eval_step output type: {type(output)}.")
-
-
-def _batched_conditions(conditions: Any) -> list[torch.Tensor]:
-    if conditions is None:
-        return []
-    if isinstance(conditions, dict):
-        return [value for value in conditions.values() if isinstance(value, torch.Tensor)]
-    if isinstance(conditions, torch.Tensor):
-        return [conditions]
-    if isinstance(conditions, (tuple, list)):
-        return [value for value in conditions if isinstance(value, torch.Tensor)]
-    return []
+    outputs = {}
+    for name, value in output.items():
+        if not isinstance(value, torch.Tensor):
+            logger.warning(f"Skip non-tensor eval output '{name}' with type {type(value)}.")
+            continue
+        outputs[str(name)] = value
+    return outputs
 
 
 def _to_chw_image(tensor: torch.Tensor) -> torch.Tensor:
@@ -150,49 +128,40 @@ def _to_chw_image(tensor: torch.Tensor) -> torch.Tensor:
     return tensor[:3].clamp(0, 1)
 
 
-def _pad_to_height(tensor: torch.Tensor, height: int) -> torch.Tensor:
-    pad_bottom = max(height - tensor.shape[-2], 0)
-    return F.pad(tensor, pad=(0, 0, 0, pad_bottom), mode="constant", value=0)
+def _safe_dir_name(name: str) -> str:
+    return name.replace("/", "_").replace("\\", "_")
 
 
 def _save_eval_batch(
     batch: dict[str, Any],
-    output_names: list[str],
-    outputs: list[torch.Tensor],
+    outputs: dict[str, torch.Tensor],
     evaluate_dir: Path,
     batch_start: int,
 ):
     prompt = batch.get("prompt", [])
     negative_prompt = batch.get("negative_prompt", [])
     image_name = batch.get("image_name", None)
-    target = batch.get("target", None)
-    conditions = _batched_conditions(batch.get("conditions", None))
 
     if isinstance(prompt, str):
         prompt = [prompt]
     if isinstance(negative_prompt, str):
         negative_prompt = [negative_prompt]
 
-    batch_size = outputs[-1].shape[0] if outputs else len(prompt)
+    first_output = next(iter(outputs.values()))
+    batch_size = first_output.shape[0]
+    output_names = list(outputs.keys())
+
+    for name in output_names:
+        (evaluate_dir / _safe_dir_name(name)).mkdir(exist_ok=True, parents=True)
 
     for batch_idx in range(batch_size):
         save_name = f"eval_{batch_start + batch_idx:06d}"
         if image_name is not None:
             save_name = image_name[batch_idx] if isinstance(image_name, (tuple, list)) else image_name
 
-        final_output = _to_chw_image(outputs[-1][batch_idx])
-        save_image(final_output, evaluate_dir / f"{save_name}.jpg")
-
-        concat_tensors = []
-        concat_tensors.extend(_to_chw_image(condition[batch_idx]) for condition in conditions)
-        if isinstance(target, torch.Tensor):
-            concat_tensors.append(_to_chw_image(target[batch_idx]))
-        concat_tensors.extend(_to_chw_image(output[batch_idx]) for output in outputs)
-
-        if concat_tensors:
-            max_h = max(tensor.shape[-2] for tensor in concat_tensors)
-            concat_tensors = [_pad_to_height(tensor, max_h) for tensor in concat_tensors]
-            save_image(torch.cat(concat_tensors, dim=-1), evaluate_dir / f"c_{save_name}.jpg")
+        for name, tensor in outputs.items():
+            save_tensor = _to_chw_image(tensor[batch_idx])
+            save_image(save_tensor, evaluate_dir / _safe_dir_name(name) / f"{save_name}.jpg")
 
         prompt_value = prompt[batch_idx] if batch_idx < len(prompt) else ""
         neg_prompt_value = negative_prompt[batch_idx] if batch_idx < len(negative_prompt) else ""
@@ -248,18 +217,18 @@ def evaluate(cfgs: OmegaConf):
 
     batch_start = 0
     for step, batch in tqdm(enumerate(dataloader), desc="Eval", total=len(dataloader)):
-        output = pipe.eval_step(
+        output: dict[str, torch.Tensor] = pipe.eval_step(
             batch,
             num_inference_steps=num_inference_steps,
             cfg_scale=cfg_scale,
         )
-        output_names, outputs = _normalize_outputs(output)
+        outputs = _normalize_outputs(output)
         if not outputs:
             logger.warning(f"Eval [{step + 1}/{len(dataloader)}] returned no tensor outputs.")
             continue
 
-        _save_eval_batch(batch, output_names, outputs, evaluate_dir, batch_start)
-        batch_start += outputs[-1].shape[0]
+        _save_eval_batch(batch, outputs, evaluate_dir, batch_start)
+        batch_start += next(iter(outputs.values())).shape[0]
         logger.info(f"Eval [{step + 1}/{len(dataloader)}] saved.")
 
     logger.info(f"Evaluation finished, saved to {evaluate_dir}.")

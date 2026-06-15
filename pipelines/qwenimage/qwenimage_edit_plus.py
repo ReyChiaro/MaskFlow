@@ -382,7 +382,7 @@ class QwenImageEditPlus(BasePipeline):
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
         )
         output = self.decode_image(output)
-        return [output]
+        return {"output": output}
 
     @torch.inference_mode()
     def generate(
