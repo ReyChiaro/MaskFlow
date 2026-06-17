@@ -1,7 +1,7 @@
 # ==========================================
 # 1. Global Augments
 # ==========================================
-GPUS=(0 1 2 3 6 7)
+GPUS=(3 5 6 7)
 NUM_GPUS=${#GPUS[@]}
 BASE_PORT=29800
 
@@ -120,14 +120,14 @@ EXPERIMENTS=(
     # "mf_mask-blur0|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.0,pipeline.mask_blur_kernel=0"
     # "mf_mask-blur75|pipeline.mask_loss_weight=1.0,pipeline.edge_loss_weight=0.0,pipeline.mask_blur_kernel=75"
 
-    # "mf-baseline|pipeline.mask_loss_weight=1.0"
-    # "mf-mask_inp-0.1-1.0|pipeline.mask_loss_weight=1.0;pipeline.mask_denoise_steps=[0.1,1.0]"
-    # "mf-mask_inp-0.0-0.9|pipeline.mask_loss_weight=1.0;pipeline.mask_denoise_steps=[0,0.9]"
-    # "mf-mask_inp-0.1-0.9|pipeline.mask_loss_weight=1.0;pipeline.mask_denoise_steps=[0.1,0.9]"
-    # "mf_ps-constant_p0.5|pipeline.mask_loss_weight=1.0;trainer.prompt_sampler_cfgs.name=constant;trainer.prompt_sampler_cfgs.p=0.5"
-    # "mf_ps-constant_p0.2|pipeline.mask_loss_weight=1.0;trainer.prompt_sampler_cfgs.name=constant;trainer.prompt_sampler_cfgs.p=0.2"
-
-    
+    "mf-baseline|pipeline.mask_loss_weight=1.0"
+    "mf-mask_inp-0.1-1.0|pipeline.mask_loss_weight=1.0;pipeline.mask_denoise_steps=[0.1,1.0]"
+    "mf-mask_inp-0.0-0.9|pipeline.mask_loss_weight=1.0;pipeline.mask_denoise_steps=[0,0.9]"
+    "mf-mask_inp-0.1-0.9|pipeline.mask_loss_weight=1.0;pipeline.mask_denoise_steps=[0.1,0.9]"
+    "mf_ps-constant_p0.5|pipeline.mask_loss_weight=1.0;trainer.prompt_sampler_cfgs.name=constant;trainer.prompt_sampler_cfgs.p=0.5"
+    "mf_ps-constant_p0.2|pipeline.mask_loss_weight=1.0;trainer.prompt_sampler_cfgs.name=constant;trainer.prompt_sampler_cfgs.p=0.2"
+    "mf_ps-linear1.0-0.5|pipeline.mask_loss_weight=1.0;trainer.prompt_sampler_cfgs.name=linear;trainer.prompt_sampler_cfgs.start_p=1.0,trainer.prompt_sampler_cfgs.end_p=0.5"
+    "mf_ps-linear1.0-0.0|pipeline.mask_loss_weight=1.0;trainer.prompt_sampler_cfgs.name=linear;trainer.prompt_sampler_cfgs.start_p=1.0,trainer.prompt_sampler_cfgs.end_p=0"
 )
 
 TOTAL_EXPS=${#EXPERIMENTS[@]}
