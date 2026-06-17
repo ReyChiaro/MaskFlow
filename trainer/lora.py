@@ -56,7 +56,6 @@ class MaskFlowTrainer(LoraTrainer):
         )
         batch["prompt"] = runtime_prompt
         if cfg_dropout is not None:
-            print("cfg drop")
             batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in runtime_prompt]
         return batch
 
