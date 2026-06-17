@@ -243,6 +243,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         source = cond_latents[0]
         noise = torch.randn_like(tgt, generator=self.generator)
         ts = self.scheduler.sample_timesteps(tgt.shape[0], self.generator, self.device)
+        sigmas = self.scheduler.get_sigmas(ts, img_seq_len=tgt.shape[1])
 
         if self.mask_denoise_train:
             # Apply masks to vector fields prediction, only the masked area will be added noise
@@ -251,13 +252,13 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
             # The disabled samples' masks will be replaced by full-one (edit all) masks,
             # thus the full images will be added noises.
-            disable_mask_ids = (ts < self.mask_denoise_steps[0]) | (self.mask_denoise_steps[1] < ts)
+            disable_mask_ids = (sigmas < self.mask_denoise_steps[0]) | (self.mask_denoise_steps[1] < sigmas)
 
             # Assign all-one masks to original mask.
             # NOTE: This will affect the mask_latents in future use (e.g. loss calculation).
             mask_latents[disable_mask_ids, ...] = 1.0
             mask_ratio[disable_mask_ids, ...] = 1.0
-        xt, sigmas, ts = self.scheduler.add_noise(noise, tgt, ts, source, mask_latents)
+        xt = self.scheduler.add_noise_by_sigmas(noise, tgt, sigmas, source, mask_latents)
         gt = self.scheduler.get_velocity(noise, tgt, source, mask_latents)
 
         return QwenMaskFlowForwardOutput(
@@ -267,7 +268,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             width=width,
             noise=noise,
             noised_target=xt,
-            timesteps=ts,
+            timesteps=sigmas,
             sigmas=sigmas,
             ground_truth=gt,
             conditions=cond_latents,

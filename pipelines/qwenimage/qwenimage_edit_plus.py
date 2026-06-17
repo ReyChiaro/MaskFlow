@@ -213,7 +213,8 @@ class QwenImageEditPlus(BasePipeline):
         # --------------- Sample and Add Noise -------------- #
         noise = torch.randn_like(x0, generator=self.generator)
         ts = self.scheduler.sample_timesteps(x0.shape[0], self.generator, self.device)
-        xt, sigmas, ts = self.scheduler.add_noise(noise, x0, ts)
+        sigmas = self.scheduler.get_sigmas(ts, img_seq_len=x0.shape[1])
+        xt = self.scheduler.add_noise_by_sigmas(noise, x0, sigmas)
         gt = self.scheduler.get_velocity(noise, x0)
 
         return QwenForwardOutput(

@@ -51,21 +51,28 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
             sigmas = t
         return sigmas.to(t.device, dtype=t.dtype)
 
-    def add_noise(self, noise: torch.Tensor, x0: torch.Tensor, t: torch.Tensor):
-        device = x0.device
-        dtype = x0.dtype
+    def get_sigmas(self, t: torch.Tensor, img_seq_len: int | None = None) -> torch.Tensor:
         if self.use_dynamic_shifting:
-            img_seq_len = x0.shape[1]
+            if img_seq_len is None:
+                raise ValueError("img_seq_len must be provided when dynamic shifting is enabled.")
             mu = self.calculate_shift_mu(img_seq_len)
         else:
             mu = self.shift_mu
-        sigmas = self.time_shift(t, mu)  # [B,], float32
+        return self.time_shift(t, mu)
+
+    def add_noise_by_sigmas(self, noise: torch.Tensor, x0: torch.Tensor, sigmas: torch.Tensor):
+        device = x0.device
+        dtype = x0.dtype
         timesteps = sigmas.clone()
         while sigmas.ndim < x0.ndim:
             sigmas = sigmas.unsqueeze(-1)
 
         xt = (1.0 - sigmas) * x0.float() + sigmas * noise.float()
-        return xt.to(device, dtype=dtype), sigmas.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
+        return xt.to(device, dtype=dtype)#, sigmas.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
+
+    def add_noise(self, noise: torch.Tensor, x0: torch.Tensor, t: torch.Tensor):
+        sigmas = self.get_sigmas(t, img_seq_len=x0.shape[1])
+        return self.add_noise_by_sigmas(noise, x0, sigmas)
 
     def get_velocity(self, noise: torch.Tensor, x0: torch.Tensor):
         return noise - x0
@@ -75,15 +82,10 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
         return (xt.float() + (next_sigma - curr_sigma) * vt).to(dtype=dtype)
 
     def _inference(self, num_inference_steps: int, img_seq_len: int | None = None):
-        if self.use_dynamic_shifting:
-            mu = self.calculate_shift_mu(img_seq_len)
-        else:
-            mu = self.shift_mu
-
         timesteps = torch.from_numpy(
             np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps, endpoint=True)
         ).float()
-        sigmas = self.time_shift(timesteps, mu).float()
+        sigmas = self.get_sigmas(timesteps, img_seq_len).float()
         sigmas = torch.cat([sigmas, torch.zeros((1,))])
 
         for step in range(num_inference_steps):
