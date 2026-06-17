@@ -1,0 +1,55 @@
+_target_: trainer.lora.MaskFlowTrainer
+_recursive_: false
+
+pipe_configs: ${pipeline}
+optimizer_configs: ${optimizer}
+train_data_configs: ${trainset}
+eval_data_configs: ${evalset}
+lora_configs: ${adapter}
+lr_scheduler_configs: null
+
+enable_save_optimizer: true
+
+base_seed: 42
+output_dir: ${project.output_dir}
+checkpoint_dir: ${project.checkpoint_dir}
+evaluation_dir: ${project.evaluation_dir}
+log_dir: ${project.log_dir}
+resume_from: ""
+
+cfg_scale: 4.0
+cfg_dropout: 0.1
+max_grad_norm: 1.0
+max_training_steps: 5000
+save_steps: 100
+eval_steps: 100
+mixed_precision: bf16
+enable_gradient_checkpoint: true
+gradient_accumulation_steps: 1
+cudnn_deterministic: false
+cudnn_benchmark: true
+
+fsdp_strategy: no_shard
+
+batch_size_per_process: 1
+data_loader_workers: 8
+
+num_inference_steps: 50
+
+# For prompt sampler
+prompt_sampler_cfgs:
+  seed: ${trainer.base_seed}
+  name: constant
+
+  # constant
+  p: 0.5
+
+  # linear-decay | const-linear
+  start_p: 1.0
+  end_p: 0.2
+  total_step: ${trainer.max_training_steps}
+
+  # const-linear
+  decay_start_step: 1000
+  decay_end_step: ${trainer.max_training_steps}
+

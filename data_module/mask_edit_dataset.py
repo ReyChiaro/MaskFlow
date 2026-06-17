@@ -46,6 +46,7 @@ class MaskEditDataset(SchemaDataset):
         sample = self.samples[index % self.num_samples]
         prompt = sample["prompt"]
         negative_prompt = sample.get("negative_prompt", "")
+        edit_instruction = sample.get("edit_instruction", "")
         conditions = sample["conditions"]
         target = sample["target"]
         image_name = Path(target).stem
@@ -67,6 +68,7 @@ class MaskEditDataset(SchemaDataset):
             "image_name": image_name,
             "prompt": self._preprocess_prompt(prompt),
             "negative_prompt": negative_prompt,
+            "edit_instruction": edit_instruction,
             "conditions": self._preprocess_conditions(conditions),
             "target": self._preprocess_target(target),
         }

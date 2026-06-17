@@ -5,6 +5,7 @@ from peft import LoraConfig
 from omegaconf import OmegaConf
 
 from trainer.base_trainer import BaseTrainer
+from trainer.prompt_sampler.prompt_sampler import PromptSampler
 
 
 @dataclasses.dataclass
@@ -37,3 +38,27 @@ class LoraTrainer(BaseTrainer):
                 p.requires_grad_(True)
 
         logger.info(f"Add LoRA adapter to transformer.")
+
+
+@dataclasses.dataclass
+class MaskFlowTrainer(LoraTrainer):
+
+    prompt_sampler_cfgs: OmegaConf = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.prompt_sampler = PromptSampler(**self.prompt_sampler_cfgs)
+
+    def preprocess_train_batch(self, batch, step: int, cfg_dropout: float | None = None):
+        runtime_prompt = self.prompt_sampler.sample_batch(
+            tuple(zip(batch["edit_instruction"], batch["prompt"])),
+            step,
+        )
+        batch["prompt"] = runtime_prompt
+        if cfg_dropout is not None:
+            print("cfg drop")
+            batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in runtime_prompt]
+        return batch
+
+    def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
+        return super().preprocess_eval_batch(batch, step, cfg_dropout)

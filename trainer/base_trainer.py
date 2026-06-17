@@ -66,6 +66,7 @@ class BaseTrainer:
     training_state_dict_file: str = "train_state.pth"
 
     # Strategy
+    cfg_dropout: float = 0.0
     max_grad_norm: float = 1.0
     max_training_steps: int = 100
     save_steps: int = 10
@@ -134,6 +135,7 @@ class BaseTrainer:
         torch.manual_seed(self.random_seed)
         torch.cuda.manual_seed(self.random_seed)
         torch.cuda.manual_seed_all(self.random_seed)
+        self.rng = random.Random(self.random_seed)
 
         torch.backends.cudnn.deterministic = self.cudnn_deterministic
         torch.backends.cudnn.benchmark = self.cudnn_benchmark
@@ -424,6 +426,14 @@ class BaseTrainer:
         wait_for_everyone()
         logger.info(f"\nLoad checkpoints from {checkpoint_path}.\nSuccessfully load: {','.join(loaded_components)}.")
 
+    def preprocess_train_batch(self, batch, step: int, cfg_dropout: float | None = None):
+        if cfg_dropout is not None:
+            batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in batch["prompt"]]
+        return batch
+
+    def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
+        return batch
+
     def train(self):
         r"""
         Train pipeline.
@@ -455,6 +465,7 @@ class BaseTrainer:
                 is_sync_step = micro_step % self.gradient_accumulation_steps == 0
                 self.set_fsdp_gradient_sync(is_sync_step)
 
+                batch = self.preprocess_train_batch(batch, global_step, self.cfg_dropout)
                 loss_dict = self.pipe.forward_step(batch)
 
                 if isinstance(loss_dict, dict):
@@ -517,6 +528,7 @@ class BaseTrainer:
         wait_for_everyone()
 
         for step, batch in enumerate(self.eval_loader):
+            batch = self.preprocess_eval_batch(batch, global_step, self.cfg_dropout)
             output: dict[str, torch.Tensor] = self.pipe.eval_step(batch, self.num_inference_steps, self.cfg_scale)
 
             # -------- Try to save the evaluation results -------- #
