@@ -15,24 +15,18 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
 
     unmask_with: Literal["target", "source", "noisy_target", "noisy_source"] = "noisy_source"
 
-    def add_noise(
+    def add_noise_by_sigmas(
         self,
-        noise,
-        x0,
-        t,
+        noise: torch.Tensor,
+        x0: torch.Tensor,
+        sigmas: torch.Tensor,
         source: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ):
         if mask is None or source is None:
-            return super().add_noise(noise, x0, t)
+            return super().add_noise_by_sigmas(noise, x0, sigmas)
         device = x0.device
         dtype = x0.dtype
-        if self.use_dynamic_shifting:
-            img_seq_len = x0.shape[1]
-            mu = self.calculate_shift_mu(img_seq_len)
-        else:
-            mu = self.shift_mu
-        sigmas = self.time_shift(t, mu)  # [B,], float32
         timesteps = sigmas.clone()
 
         while sigmas.ndim < x0.ndim:
@@ -54,7 +48,18 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
                 f"{self.unmask_with=} is not supported. Acceptable values are [target, source, noisy_target, noisy_source]."
             )
 
-        return xt.to(device, dtype=dtype), sigmas.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
+        return xt.to(device, dtype=dtype)#, sigmas.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
+
+    def add_noise(
+        self,
+        noise,
+        x0,
+        t,
+        source: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+    ):
+        sigmas = self.get_sigmas(t, img_seq_len=x0.shape[1])
+        return self.add_noise_by_sigmas(noise, x0, sigmas, source, mask)
 
     def get_velocity(self, noise, x0, source: torch.Tensor | None = None, mask: torch.Tensor | None = None):
         if source is None or mask is None:
