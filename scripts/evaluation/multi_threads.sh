@@ -10,7 +10,7 @@ export HYDRA_FULL_ERROR="${HYDRA_FULL_ERROR:-1}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
 GPUS_CSV="${GPUS:-1,2,3,5}"
-IFS="," read -r -a GPUS <<< "$GPUS_CSV"
+IFS=";" read -r -a GPUS <<< "$GPUS_CSV"
 NUM_GPUS=${#GPUS[@]}
 
 MASTER_PORT_BASE="${MASTER_PORT_BASE:-29655}"
@@ -18,14 +18,14 @@ MASTER_PORT_BASE="${MASTER_PORT_BASE:-29655}"
 PIPELINE="${PIPELINE:-qwenimage_mask_flow}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen-Image-Edit-2511}"
 IMAGE_ROOT="${IMAGE_ROOT:-dataset/MaskEdit/scene}"
-DATA_FILE="${DATA_FILE:-${IMAGE_ROOT}/testset2.jsonl}"
+DATA_FILE="${DATA_FILE:-${IMAGE_ROOT}/test.jsonl}"
 LORA_MODEL="${LORA_MODEL:-pretrained_weights/lora_adapter}"
 LORA_SAFETENSORS_DIR="${LORA_SAFETENSORS_DIR:-$LORA_MODEL}"
-ADAPTER_NAME="${ADAPTER_NAME:-default}"
+ADAPTER_NAME="${ADAPTER_NAME:-maskflow}"
 IS_FSDP_CHECKPOINT="${IS_FSDP_CHECKPOINT:-false}"
 
 BASE_SEED="${BASE_SEED:-42}"
-CFG_SCALE="${CFG_SCALE:-1.0}"
+CFG_SCALE="${CFG_SCALE:-4.0}"
 NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-50}"
 BATCH_SIZE_PER_PROCESS="${BATCH_SIZE_PER_PROCESS:-1}"
 DATA_LOADER_WORKERS="${DATA_LOADER_WORKERS:-0}"
@@ -51,7 +51,10 @@ pipeline_args() {
                 "pipeline.mask_loss_weight=${MASK_LOSS_WEIGHT:-0.5}" \
                 "pipeline.edge_loss_weight=${EDGE_LOSS_WEIGHT:-0}" \
                 "pipeline.enable_vae_mask_encoding=${ENABLE_VAE_MASK_ENCODING:-true}" \
-                "pipeline.inpainting_denoising_steps=${INPAINTING_DENOISING_STEPS:-45}"
+                "pipeline.enable_masked_loss=true" \
+                "pipeline.mask_denoise_steps=[0.0,1.0]" \
+                "pipeline.mask_denoise_train=true" \
+                "pipeline.mask_denoise_infer=true"
             ;;
         qwenimage_edit_plus_2511)
             ;;
