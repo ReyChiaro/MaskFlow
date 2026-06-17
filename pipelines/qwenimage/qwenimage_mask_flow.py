@@ -192,9 +192,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         # Conduct CFG dropout
         prompt = preprocessed_data.prompt
-        # if random.random() < self.cfg_dropout:
-        #     prompt = ""
-
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
 
         image_shapes = []
@@ -259,6 +256,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             # Assign all-one masks to original mask.
             # NOTE: This will affect the mask_latents in future use (e.g. loss calculation).
             mask_latents[disable_mask_ids, ...] = 1.0
+            mask_ratio[disable_mask_ids, ...] = 1.0
         xt, sigmas, ts = self.scheduler.add_noise(noise, tgt, ts, source, mask_latents)
         gt = self.scheduler.get_velocity(noise, tgt, source, mask_latents)
 

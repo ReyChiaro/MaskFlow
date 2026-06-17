@@ -45,7 +45,7 @@ run_base_experiment() {
         "adapter.adapter_name=maskflow"
         "trainer=maskflow"
         "trainer.prompt_sampler_cfgs.name=constant"
-        "trainer.prompt_sampler_cfgs.p=0.5"
+        "trainer.prompt_sampler_cfgs.p=0"
         "trainer.prompt_sampler_cfgs.start_p=1.0"
         "trainer.prompt_sampler_cfgs.end_p=0.2"
         "trainer.prompt_sampler_cfgs.decay_start_step=500"
