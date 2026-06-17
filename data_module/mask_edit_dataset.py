@@ -32,7 +32,7 @@ class MaskEditDataset(SchemaDataset):
                 return prompt.split(separator, 1)[0].strip()
         return prompt.strip()
 
-    def _replace_placeholder(self, prompt: str, replacement: str, placeholder: str = "[TARGET]"):
+    def _replace_placeholder(self, prompt: str, replacement: str, placeholder: str = "[MASK_AREA]"):
         return prompt.replace(placeholder, replacement)
 
     def _preprocess_prompt(self, prompt, **kwargs) -> str:

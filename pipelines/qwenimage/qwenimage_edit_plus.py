@@ -189,9 +189,6 @@ class QwenImageEditPlus(BasePipeline):
 
         # Conduct CFG dropout
         prompt = preprocessed_data.prompt
-        # if random.random() < self.cfg_dropout:
-        #     prompt = ""
-
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
 
         image_shapes = []
