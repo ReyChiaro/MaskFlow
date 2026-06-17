@@ -189,8 +189,8 @@ class QwenImageEditPlus(BasePipeline):
 
         # Conduct CFG dropout
         prompt = preprocessed_data.prompt
-        if random.random() < self.cfg_dropout:
-            prompt = ""
+        # if random.random() < self.cfg_dropout:
+        #     prompt = ""
 
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
 
@@ -383,84 +383,3 @@ class QwenImageEditPlus(BasePipeline):
         )
         output = self.decode_image(output)
         return {"output": output}
-
-    @torch.inference_mode()
-    def generate(
-        self,
-        prompt: str,
-        negative_prompt: str | None = None,
-        conditions: dict[str, Image.Image] | None = None,
-        height: int = 1024,
-        width: int = 1024,
-        cfg_scale: float = 4.0,
-        num_inference_steps: int = 50,
-    ):
-        raise NotImplementedError
-
-        # ---------------- Preprocess ---------------- #
-        if conditions is not None:
-            raw_ar = width / height
-            target_ar = min(ASPECT_RATIOS, key=lambda x: abs(raw_ar - int(x.split(":")[0]) / int(x.split(":")[1])))
-            target_ar = int(target_ar.split(":")[0]) / int(target_ar.split(":")[1])
-            height, width = (height, int(height * target_ar)) if raw_ar > target_ar else (int(width / target_ar), width)
-            height = height // DIVISIBLE_BY * DIVISIBLE_BY
-            width = width // DIVISIBLE_BY * DIVISIBLE_BY
-
-            conditions = [T.to_tensor(i).unsqueeze(0).to(self.device, dtype=self.dtype) for i in conditions]
-            image_aspect = [crop_image_to_aspect_ratio(i) for i in conditions]
-            conditions = [reshape_to_divisible_max_resolution(i, ar, MAX_RESOLUTION) for i, ar in image_aspect]
-            image_vlm = [reshape_to_divisible_max_resolution(i, ar, MAX_CONDITION_RESOLUTION) for i, ar in image_aspect]
-            image_dit = [self.image_processor.preprocess(c, c.height, c.width).unsqueeze(2) for c in conditions]
-
-        # ---------------- Encode ---------------- #
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, image_vlm)
-        neg_prompt_embeds, neg_prompt_embeds_mask = None, None
-        if negative_prompt is not None and cfg_scale > 0:
-            neg_prompt_embeds, neg_prompt_embeds_mask = self.encode_prompt(negative_prompt, image_vlm)
-
-        image_shapes = []
-        noise_shape = (1, self.vae_channels, 1, height // self.vae_scale_factor, width // self.vae_scale_factor)
-        noise_latents = torch.randn(noise_shape, generator=self.generator, device=self.device, dtype=self.dtype)
-        noise_latents = QwenImageEditPlusPipeline._pack_latents(
-            noise_latents, noise_shape[0], noise_shape[1], noise_shape[-2], noise_shape[-1]
-        )
-        image_shapes.append((1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size))
-
-        image_latents = None
-        if conditions is not None:
-            image_latents = [self.encode_image(c, "argmax") for c in image_dit]
-            image_shapes.extend(
-                [(1, i.shape[-2] // self.pacth_size, i.shape[-1] // self.pacth_size) for i in image_latents]
-            )
-            image_latents = [
-                QwenImageEditPlusPipeline._pack_latents(c, c.shape[0], c.shape[1], c.shape[-2], c.shape[-1])
-                for c in image_latents
-            ]
-
-        # ---------------- Denoise ---------------- #
-        xt = noise_latents
-        with self.scheduler.inference_sampler(xt, num_inference_steps, xt.shape[1]) as sampler:
-            for xt, t, inferencer in tqdm(sampler, total=num_inference_steps):
-                hidden_states = xt
-                if image_latents is not None:
-                    hidden_states = torch.cat([hidden_states] + [c for c in image_latents], dim=1)
-
-                timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
-                pred = self.denoise(
-                    hidden_states, timestep, prompt_embeds, prompt_embeds_mask, image_shapes, xt.shape[1]
-                )
-
-                # Do CFG
-                if cfg_scale > 0:
-                    neg_pred = self.denoise(
-                        hidden_states, timestep, neg_prompt_embeds, neg_prompt_embeds_mask, image_shapes, xt.shape[1]
-                    )
-                    cfg_pred = neg_pred + cfg_scale * (pred - neg_pred)
-                    pred_norm = torch.norm(pred, dim=-1, keepdim=True)
-                    cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
-                    pred = (pred_norm / cfg_norm) * cfg_pred
-
-                inferencer.step(pred)
-        output = QwenImageEditPlusPipeline._unpack_latents(xt, height, width, self.vae_scale_factor)
-        output = self.decode_image(output)
-        return output

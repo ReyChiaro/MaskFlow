@@ -2,19 +2,22 @@ _target_: pipelines.qwenimage.qwenimage_mask_flow.QwenImageMaskFlow
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
-cfg_dropout: 0.1
+# cfg_dropout: 0.1
 
 mask_dilation_kernel: 25
 mask_blur_kernel: 25
 mask_blur_sigma: 25.0
 mask_edge_width: 50
 
-mask_loss_weight: 0.5
+mask_loss_weight: 1.0
 edge_loss_weight: 0.0
 
 enable_vae_mask_encoding: true
 enable_masked_loss: true
-inpainting_denoising_steps: 45
+mask_denoise_steps: [0.0, 1.0]
+mask_denoise_train: true
+mask_denoise_infer: true
+# inpainting_denoising_steps: 45
 
 fsdp_configs:
   transformer.transformer_blocks:

@@ -1,4 +1,4 @@
-_target_: trainer.lora.LoraTrainer
+_target_: trainer.lora.MaskFlowTrainer
 _recursive_: false
 
 pipe_configs: ${pipeline}
@@ -35,3 +35,21 @@ batch_size_per_process: 1
 data_loader_workers: 8
 
 num_inference_steps: 50
+
+# For prompt sampler
+prompt_sampler_cfgs:
+  seed: ${trainer.base_seed}
+  name: constant
+
+  # constant
+  p: 0.5
+
+  # linear-decay | const-linear
+  start_p: 1.0
+  end_p: 0.2
+  total_step: ${trainer.max_training_steps}
+
+  # const-linear
+  decay_start_step: 1000
+  decay_end_step: ${trainer.max_training_steps}
+

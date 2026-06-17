@@ -2,7 +2,7 @@ _target_: pipelines.qwenimage.qwenimage_edit_plus.QwenImageEditPlus
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
-cfg_dropout: 0.1
+# cfg_dropout: 0.1
 
 fsdp_configs:
   transformer.transformer_blocks:

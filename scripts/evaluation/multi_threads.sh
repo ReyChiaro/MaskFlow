@@ -9,7 +9,7 @@ set -euo pipefail
 export HYDRA_FULL_ERROR="${HYDRA_FULL_ERROR:-1}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
-GPUS_CSV="${GPUS:-0,1,2,3,4,5,6,7}"
+GPUS_CSV="${GPUS:-1,2,3,5}"
 IFS="," read -r -a GPUS <<< "$GPUS_CSV"
 NUM_GPUS=${#GPUS[@]}
 
@@ -21,6 +21,7 @@ IMAGE_ROOT="${IMAGE_ROOT:-dataset/MaskEdit/scene}"
 DATA_FILE="${DATA_FILE:-${IMAGE_ROOT}/testset2.jsonl}"
 LORA_MODEL="${LORA_MODEL:-pretrained_weights/lora_adapter}"
 LORA_SAFETENSORS_DIR="${LORA_SAFETENSORS_DIR:-$LORA_MODEL}"
+ADAPTER_NAME="${ADAPTER_NAME:-default}"
 IS_FSDP_CHECKPOINT="${IS_FSDP_CHECKPOINT:-false}"
 
 BASE_SEED="${BASE_SEED:-42}"
@@ -83,6 +84,7 @@ BASE_ARGS=(
     "pipeline=$PIPELINE"
     "pipeline.pretrained_model=$BASE_MODEL"
     "adapter=lora"
+    "adapter.adapter_name=$ADAPTER_NAME"
     "base_seed=$BASE_SEED"
     "resume_from=$LORA_MODEL"
     "+is_fsdp_checkpoint=$IS_FSDP_CHECKPOINT"

@@ -3,10 +3,10 @@ import torch.nn.functional as F
 from transformers import AutoImageProcessor, AutoModel, CLIPModel
 
 from evaluator.register import REGISTER_METRIC
-from .mask_utils import mask_region_pair
+from evaluator.metrics.mask_utils import mask_region_pair
 
-CLIP_MODEL_ID = "openai/clip-vit-large-patch14-336"
-DINO_MODEL_ID = "facebook/dinov2-large"
+CLIP_MODEL_ID = "/data/nvme7/models/clip-vit-large-patch14-336"
+DINO_MODEL_ID = "/data/nvme7/models/dinov2-large"
 
 _MODEL_CACHE: dict[tuple[str, str], tuple[object, torch.nn.Module]] = {}
 

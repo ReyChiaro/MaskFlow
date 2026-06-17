@@ -28,6 +28,7 @@ dataset/
 deprecated/
 multi_threads_logs/
 ablations/
+evaluations/
 _test*.py
 *.jsonl
 *.json

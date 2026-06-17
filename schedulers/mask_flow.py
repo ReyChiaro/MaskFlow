@@ -15,7 +15,14 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
 
     unmask_with: Literal["target", "source", "noisy_target", "noisy_source"] = "noisy_source"
 
-    def add_noise(self, noise, x0, t, source: torch.Tensor | None = None, mask: torch.Tensor | None = None):
+    def add_noise(
+        self,
+        noise,
+        x0,
+        t,
+        source: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+    ):
         if mask is None or source is None:
             return super().add_noise(noise, x0, t)
         device = x0.device
