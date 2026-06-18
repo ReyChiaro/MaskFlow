@@ -161,7 +161,7 @@ def _save_eval_batch(
 
         for name, tensor in outputs.items():
             save_tensor = _to_chw_image(tensor[batch_idx])
-            save_image(save_tensor, evaluate_dir / _safe_dir_name(name) / f"{save_name}.jpg")
+            save_image(save_tensor, evaluate_dir / _safe_dir_name(name) / f"{save_name}.png")
 
         prompt_value = prompt[batch_idx] if batch_idx < len(prompt) else ""
         neg_prompt_value = negative_prompt[batch_idx] if batch_idx < len(negative_prompt) else ""

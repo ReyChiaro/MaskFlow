@@ -10,7 +10,10 @@ def SSIM(source: torch.Tensor, target: torch.Tensor, **kwargs):
     ssim = StructuralSimilarityIndexMeasure(data_range=(0.0, 1.0)).to(image_device(source))
     with torch.inference_mode():
         return mean_metric(
-            [ssim(source_image, target_image).item() for source_image, target_image, _ in iter_image_pairs(source, target)]
+            [
+                ssim(source_image, target_image).item()
+                for source_image, target_image, _ in iter_image_pairs(source, target)
+            ]
         )
 
 

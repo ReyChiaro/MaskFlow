@@ -21,10 +21,13 @@ def _to_device(value, device: torch.device):
 @dataclass
 class Evaluator:
 
-    def __init__(self, device: torch.device = torch.device("cpu")):
+    def __init__(self, metrics: list[str] | None = None, device: torch.device = torch.device("cpu")):
         initialize_metrics()
         self.device = device
         self.metrics = get_metrics()
+
+        if metrics is not None:
+            self.metrics = {k: fn for k, fn in self.metrics.items() if k in metrics}
 
     def compute(
         self,
@@ -48,5 +51,6 @@ class Evaluator:
                 continue
             logger.info(f"Evaluate {metric_name}")
             result: float = metric_fn(sources, targets, **kwargs)
+            logger.info(f"🎉 {metric_name}: {result} 🎉")
             results[metric_name] = result
         return results

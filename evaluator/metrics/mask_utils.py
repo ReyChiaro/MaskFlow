@@ -36,7 +36,9 @@ def iter_image_pairs(
     mask_list = optional_mask_list(mask)
 
     if len(source_list) != len(target_list):
-        raise ValueError(f"Given sources ({len(source_list)}) and targets ({len(target_list)}) should contain same num.")
+        raise ValueError(
+            f"Given sources ({len(source_list)}) and targets ({len(target_list)}) should contain same num."
+        )
     if mask_list is not None and len(source_list) != len(mask_list):
         raise ValueError(f"Given sources ({len(source_list)}) and masks ({len(mask_list)}) should contain same num.")
 
@@ -54,7 +56,9 @@ def iter_image_pairs(
                 f"got {tuple(pair_mask.shape[-2:])}."
             )
 
-        yield source_image.unsqueeze(0), target_image.unsqueeze(0), None if pair_mask is None else pair_mask.unsqueeze(0)
+        yield source_image.unsqueeze(0), target_image.unsqueeze(0), (
+            None if pair_mask is None else pair_mask.unsqueeze(0)
+        )
 
 
 def mean_metric(values: list[float]) -> float:
@@ -63,7 +67,7 @@ def mean_metric(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
-def region_mask(mask: torch.Tensor, source: torch.Tensor, foreground: bool) -> torch.Tensor:
+def region_mask(mask: torch.Tensor, source: torch.Tensor, foreground: bool, binary_thresh: float = 0) -> torch.Tensor:
     mask = mask.to(device=source.device)
     if mask.ndim == 3:
         mask = mask.unsqueeze(1)
@@ -74,7 +78,7 @@ def region_mask(mask: torch.Tensor, source: torch.Tensor, foreground: bool) -> t
     if mask.shape[0] != source.shape[0] or mask.shape[-2:] != source.shape[-2:]:
         raise ValueError(f"Mask shape {tuple(mask.shape)} does not match image shape {tuple(source.shape)}.")
 
-    mask = mask > 0.5
+    mask = mask > binary_thresh
     if not foreground:
         mask = ~mask
     return mask.expand_as(source)
@@ -85,6 +89,7 @@ def mask_region_pair(
     target: torch.Tensor,
     mask: torch.Tensor,
     foreground: bool,
+    binary_thresh: float = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    mask = region_mask(mask, source, foreground).to(dtype=source.dtype)
+    mask = region_mask(mask, source, foreground, binary_thresh).to(dtype=source.dtype)
     return source * mask, target * mask

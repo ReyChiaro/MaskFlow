@@ -4,6 +4,7 @@ import torch
 import argparse
 import torchvision.transforms.functional as T
 
+from tqdm import tqdm
 from pathlib import Path
 from PIL import Image
 from loguru import logger
@@ -35,7 +36,7 @@ def collect_images(path: str) -> list[str]:
 
     if not images:
         raise FileNotFoundError(f"No image files found for: {path}")
-    images.sort(key=lambda image_path: (Path(image_path).name, image_path))
+    images.sort(key=lambda image_path: (Path(image_path).stem, image_path))
     return images
 
 
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.rank}") if args.rank >= 0 else torch.device("cpu")
-    evaluator = Evaluator(device)
+    evaluator = Evaluator(["SSIM-FG","SSIM-BG"], device)
 
     metric_content = "\n" + " Metrics ".center(70, "=")
     for k, fn in evaluator.metrics.items():
@@ -59,9 +60,9 @@ if __name__ == "__main__":
     metric_content += "\n" + "=" * 70
     logger.info(metric_content)
 
-    source = collect_images(args.source)
-    target = collect_images(args.target)
-    mask = collect_images(args.mask) if args.mask is not None else None
+    source = collect_images(args.source)[:5]
+    target = collect_images(args.target)[:5]
+    mask = collect_images(args.mask)[:5] if args.mask is not None else None
     save_to = args.save_to
 
     assert len(source) == len(target), f"Num of source and target should be equal."
@@ -70,18 +71,34 @@ if __name__ == "__main__":
 
     config_content = "\n" + " Configs ".center(70, "=")
     config_content += f"\n  device: {device}"
-    config_content += f"\n  source: {source}"
-    config_content += f"\n  target: {target}"
-    config_content += f"\n  mask: {mask}"
+    config_content += f"\n  source: {len(source)}"
+    config_content += f"\n  target: {len(target)}"
+    config_content += f"\n  mask: {len(mask)}"
     config_content += f"\n  save_to: {save_to}"
     config_content += "\n" + "=" * 70
     logger.info(config_content)
 
-    source = [T.to_tensor(Image.open(s).convert("RGB")) for s in source]
-    target = [T.to_tensor(Image.open(t).convert("RGB")) for t in target]
-    mask = [T.to_tensor(Image.open(m).convert("L")) for m in mask] if mask is not None else None
+    logger.info(f"Opening images and converting them to Tensors.")
+    source_tensors = []
+    target_tensors = []
+    mask_tensors = [] if mask is not None else None
+    for i in tqdm(range(len(source)), total=len(source), desc="Loading Tensors"):
+        assert (
+            Path(source[i]).stem == Path(target[i]).stem
+        ), f"source {Path(source[i]).stem} not match to target {Path(target[i]).stem}."
+        source_image = T.to_tensor(Image.open(source[i]).convert("RGB")).clamp(0.0, 1.0)
+        target_image = T.resize(
+            T.to_tensor(Image.open(target[i]).convert("RGB")),
+            [*source_image.shape[-2:]],
+            interpolation=T.InterpolationMode.BILINEAR,
+        ).clamp(0.0, 1.0)
+        target_tensors.append(target_image)
+        source_tensors.append(source_image)
+        if mask is not None:
+            mask_image = T.to_tensor(Image.open(mask[i]).convert("L")).clamp(0.0, 1.0)
+            mask_tensors.append(mask_image)
 
-    metric_results = evaluator.compute(source, target, mask=mask)
+    metric_results = evaluator.compute(source_tensors, target_tensors, mask=mask_tensors)
     logger.info(f"Metric calculation finished.")
 
     metric_content = "\n" + " Results ".center(70, "=")
