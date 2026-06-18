@@ -6,6 +6,18 @@ from loguru import logger
 from evaluator.register import get_metrics, initialize_metrics
 
 
+def _num_images(images: torch.Tensor | list[torch.Tensor]) -> int:
+    return len(images) if isinstance(images, list) else len(images)
+
+
+def _to_device(value, device: torch.device):
+    if isinstance(value, torch.Tensor):
+        return value.to(device)
+    if isinstance(value, list):
+        return [item.to(device) if isinstance(item, torch.Tensor) else item for item in value]
+    return value
+
+
 @dataclass
 class Evaluator:
 
@@ -16,17 +28,17 @@ class Evaluator:
 
     def compute(
         self,
-        sources: torch.Tensor,
-        targets: torch.Tensor,
+        sources: torch.Tensor | list[torch.Tensor],
+        targets: torch.Tensor | list[torch.Tensor],
         **kwargs,
     ) -> dict[str, float]:
-        assert len(sources) == len(
+        assert _num_images(sources) == _num_images(
             targets
-        ), f"Given sources ({len(sources)}) and targets ({len(targets)}) should contain same num of items."
+        ), f"Given sources ({_num_images(sources)}) and targets ({_num_images(targets)}) should contain same num of items."
 
-        sources = sources.to(self.device)
-        targets = targets.to(self.device)
-        kwargs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in kwargs.items()}
+        sources = _to_device(sources, self.device)
+        targets = _to_device(targets, self.device)
+        kwargs = {k: _to_device(v, self.device) for k, v in kwargs.items()}
         has_mask = kwargs.get("mask") is not None
 
         results = {}

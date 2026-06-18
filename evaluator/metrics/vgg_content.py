@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torchvision.models import VGG16_Weights, vgg16
 
 from evaluator.register import REGISTER_METRIC
-from .mask_utils import mask_region_pair
+from .mask_utils import iter_image_pairs, mask_region_pair, mean_metric
 
 _VGG_CONTENT_MODELS: dict[str, torch.nn.Module] = {}
 
@@ -36,18 +36,29 @@ def _vgg_content_loss(source: torch.Tensor, target: torch.Tensor) -> float:
 @REGISTER_METRIC("VGG-CONTENT")
 def VGG_CONTENT(source: torch.Tensor, target: torch.Tensor, **kwargs):
     with torch.inference_mode():
-        return _vgg_content_loss(source, target)
+        return mean_metric(
+            [
+                _vgg_content_loss(source_image, target_image)
+                for source_image, target_image, _ in iter_image_pairs(source, target)
+            ]
+        )
 
 
 @REGISTER_METRIC("VGG-CONTENT-FG")
 def VGG_CONTENT_FG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, **kwargs):
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=True)
-        return _vgg_content_loss(masked_source, masked_target)
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=True)
+            values.append(_vgg_content_loss(masked_source, masked_target))
+        return mean_metric(values)
 
 
 @REGISTER_METRIC("VGG-CONTENT-BG")
 def VGG_CONTENT_BG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, **kwargs):
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=False)
-        return _vgg_content_loss(masked_source, masked_target)
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=False)
+            values.append(_vgg_content_loss(masked_source, masked_target))
+        return mean_metric(values)

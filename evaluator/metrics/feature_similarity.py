@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from transformers import AutoImageProcessor, AutoModel, CLIPModel
 
 from evaluator.register import REGISTER_METRIC
-from evaluator.metrics.mask_utils import mask_region_pair
+from evaluator.metrics.mask_utils import iter_image_pairs, mask_region_pair, mean_metric
 
 CLIP_MODEL_ID = "/data/nvme7/models/clip-vit-large-patch14-336"
 DINO_MODEL_ID = "/data/nvme7/models/dinov2-large"
@@ -59,10 +59,19 @@ def _image_features(
     return torch.cat(features, dim=0)
 
 
-def _feature_similarity(source: torch.Tensor, target: torch.Tensor, model_id: str, batch_size: int = 8) -> float:
+def _feature_similarity_pair(source: torch.Tensor, target: torch.Tensor, model_id: str, batch_size: int = 8) -> float:
     source_features = _image_features(source, model_id, batch_size=batch_size)
     target_features = _image_features(target, model_id, batch_size=batch_size)
     return (source_features * target_features).sum(dim=-1).mean().item()
+
+
+def _feature_similarity(source: torch.Tensor, target: torch.Tensor, model_id: str, batch_size: int = 8) -> float:
+    return mean_metric(
+        [
+            _feature_similarity_pair(source_image, target_image, model_id, batch_size=batch_size)
+            for source_image, target_image, _ in iter_image_pairs(source, target)
+        ]
+    )
 
 
 @REGISTER_METRIC("CLIP")
@@ -74,15 +83,21 @@ def CLIP(source: torch.Tensor, target: torch.Tensor, clip_batch_size: int = 8, *
 @REGISTER_METRIC("CLIP-FG")
 def CLIP_FG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, clip_batch_size: int = 8, **kwargs):
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=True)
-        return _feature_similarity(masked_source, masked_target, CLIP_MODEL_ID, batch_size=clip_batch_size)
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=True)
+            values.append(_feature_similarity_pair(masked_source, masked_target, CLIP_MODEL_ID, batch_size=clip_batch_size))
+        return mean_metric(values)
 
 
 @REGISTER_METRIC("CLIP-BG")
 def CLIP_BG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, clip_batch_size: int = 8, **kwargs):
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=False)
-        return _feature_similarity(masked_source, masked_target, CLIP_MODEL_ID, batch_size=clip_batch_size)
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=False)
+            values.append(_feature_similarity_pair(masked_source, masked_target, CLIP_MODEL_ID, batch_size=clip_batch_size))
+        return mean_metric(values)
 
 
 @REGISTER_METRIC("DINO")
@@ -94,12 +109,18 @@ def DINO(source: torch.Tensor, target: torch.Tensor, dino_batch_size: int = 8, *
 @REGISTER_METRIC("DINO-FG")
 def DINO_FG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, dino_batch_size: int = 8, **kwargs):
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=True)
-        return _feature_similarity(masked_source, masked_target, DINO_MODEL_ID, batch_size=dino_batch_size)
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=True)
+            values.append(_feature_similarity_pair(masked_source, masked_target, DINO_MODEL_ID, batch_size=dino_batch_size))
+        return mean_metric(values)
 
 
 @REGISTER_METRIC("DINO-BG")
 def DINO_BG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, dino_batch_size: int = 8, **kwargs):
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=False)
-        return _feature_similarity(masked_source, masked_target, DINO_MODEL_ID, batch_size=dino_batch_size)
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=False)
+            values.append(_feature_similarity_pair(masked_source, masked_target, DINO_MODEL_ID, batch_size=dino_batch_size))
+        return mean_metric(values)

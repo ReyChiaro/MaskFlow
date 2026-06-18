@@ -1,5 +1,5 @@
-import os
 import json
+import glob
 import torch
 import argparse
 import torchvision.transforms.functional as T
@@ -9,6 +9,33 @@ from PIL import Image
 from loguru import logger
 
 from evaluator.evaluator import Evaluator
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+
+
+def collect_images(path: str) -> list[str]:
+    paths = sorted(glob.glob(path)) if glob.has_magic(path) else [path]
+    if not paths:
+        raise FileNotFoundError(f"No paths matched: {path}")
+
+    images = []
+    for item in paths:
+        item_path = Path(item)
+        if item_path.is_file():
+            images.append(str(item_path))
+            continue
+        if not item_path.is_dir():
+            raise FileNotFoundError(f"Path does not exist or is not a file/directory: {item}")
+
+        images.extend(
+            str(child)
+            for child in sorted(item_path.iterdir())
+            if child.is_file() and child.suffix.lower() in IMAGE_EXTENSIONS
+        )
+
+    if not images:
+        raise FileNotFoundError(f"No image files found for: {path}")
+    return images
 
 
 if __name__ == "__main__":
@@ -31,9 +58,6 @@ if __name__ == "__main__":
     metric_content += "\n" + "=" * 70
     logger.info(metric_content)
 
-    def collect_images(path: str) -> list[str]:
-        return [path] if Path(path).is_file() else [os.path.join(path, i) for i in sorted(os.listdir(path))]
-
     source = collect_images(args.source)
     target = collect_images(args.target)
     mask = collect_images(args.mask) if args.mask is not None else None
@@ -52,9 +76,9 @@ if __name__ == "__main__":
     config_content += "\n" + "=" * 70
     logger.info(config_content)
 
-    source = torch.stack([T.to_tensor(Image.open(s).convert("RGB")) for s in source], dim=0)
-    target = torch.stack([T.to_tensor(Image.open(t).convert("RGB")) for t in target], dim=0)
-    mask = torch.stack([T.to_tensor(Image.open(m).convert("L")) for m in mask], dim=0) if mask is not None else None
+    source = [T.to_tensor(Image.open(s).convert("RGB")) for s in source]
+    target = [T.to_tensor(Image.open(t).convert("RGB")) for t in target]
+    mask = [T.to_tensor(Image.open(m).convert("L")) for m in mask] if mask is not None else None
 
     metric_results = evaluator.compute(source, target, mask=mask)
     logger.info(f"Metric calculation finished.")

@@ -2,27 +2,35 @@ import torch
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from evaluator.register import REGISTER_METRIC
-from .mask_utils import mask_region_pair
+from .mask_utils import image_device, iter_image_pairs, mask_region_pair, mean_metric
 
 
 @REGISTER_METRIC("SSIM")
 def SSIM(source: torch.Tensor, target: torch.Tensor, **kwargs):
-    ssim = StructuralSimilarityIndexMeasure(data_range=(0.0, 1.0)).to(source.device)
+    ssim = StructuralSimilarityIndexMeasure(data_range=(0.0, 1.0)).to(image_device(source))
     with torch.inference_mode():
-        return ssim(source, target).item()
+        return mean_metric(
+            [ssim(source_image, target_image).item() for source_image, target_image, _ in iter_image_pairs(source, target)]
+        )
 
 
 @REGISTER_METRIC("SSIM-FG")
 def SSIM_FG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, **kwargs):
-    ssim = StructuralSimilarityIndexMeasure(data_range=(0.0, 1.0)).to(source.device)
+    ssim = StructuralSimilarityIndexMeasure(data_range=(0.0, 1.0)).to(image_device(source))
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=True)
-        return ssim(masked_source, masked_target).item()
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=True)
+            values.append(ssim(masked_source, masked_target).item())
+        return mean_metric(values)
 
 
 @REGISTER_METRIC("SSIM-BG")
 def SSIM_BG(source: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, **kwargs):
-    ssim = StructuralSimilarityIndexMeasure(data_range=(0.0, 1.0)).to(source.device)
+    ssim = StructuralSimilarityIndexMeasure(data_range=(0.0, 1.0)).to(image_device(source))
     with torch.inference_mode():
-        masked_source, masked_target = mask_region_pair(source, target, mask, foreground=False)
-        return ssim(masked_source, masked_target).item()
+        values = []
+        for source_image, target_image, mask_image in iter_image_pairs(source, target, mask):
+            masked_source, masked_target = mask_region_pair(source_image, target_image, mask_image, foreground=False)
+            values.append(ssim(masked_source, masked_target).item())
+        return mean_metric(values)
