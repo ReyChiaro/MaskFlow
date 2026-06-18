@@ -35,6 +35,7 @@ def collect_images(path: str) -> list[str]:
 
     if not images:
         raise FileNotFoundError(f"No image files found for: {path}")
+    images.sort(key=lambda image_path: (Path(image_path).name, image_path))
     return images
 
 
