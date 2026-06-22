@@ -60,9 +60,10 @@ if __name__ == "__main__":
     metric_content += "\n" + "=" * 70
     logger.info(metric_content)
 
-    source = collect_images(args.source)[:5]
-    target = collect_images(args.target)[:5]
-    mask = collect_images(args.mask)[:5] if args.mask is not None else None
+    source = collect_images(args.source)
+    target = collect_images(args.target)
+    mask = collect_images(args.mask) if args.mask is not None else None
+    print(source, target, mask)
     save_to = args.save_to
 
     assert len(source) == len(target), f"Num of source and target should be equal."

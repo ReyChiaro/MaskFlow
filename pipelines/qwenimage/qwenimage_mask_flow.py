@@ -11,27 +11,20 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
     calculate_dimensions,
 )
 
-from PIL import Image
 from tqdm import tqdm
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 from loguru import logger
 
 from schedulers import MaskFlowScheduler
 from pipelines.base_pipeline import PreprocessOutput
 from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus, QwenForwardOutput
-from data_module.utils import (
-    reshape_to_divisible_max_resolution,
-    crop_image_to_aspect_ratio,
-    ASPECT_RATIOS,
-    MAX_RESOLUTION,
-    MAX_CONDITION_RESOLUTION,
-    DIVISIBLE_BY,
-)
+from data_module.utils import MAX_RESOLUTION
 
 
 @dataclasses.dataclass
 class QwenMaskFlowPreprocessOutput(PreprocessOutput):
 
+    raw_source: torch.Tensor | None = None
     mask: torch.Tensor | None = None
     edge: torch.Tensor | None = None
 
@@ -141,13 +134,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             mask = self.blur_mask(mask)
             edge = self.blur_mask(edge)
 
-        # mask_ratio = mask.flatten(1).sum(dim=-1, keepdim=True) / math.prod(mask.shape[1:])
-        # mask_ratio = mask_ratio.view(mask.shape[0], 1, 1)
-
-        # mask_image = mask.clone()
-        # edge_image = edge.clone()
-        # raw_target = target.clone()
-
         # To tensor and reshape all images to target area as
         # the mask/source images are supposed to be same shapes.
         h, w = target.shape[-2:]
@@ -173,6 +159,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             vlm_conditions=vlm_conditions,
             dit_conditions=dit_conditions,
             target=target,
+            raw_source=source,
             mask=mask,
             edge=edge,
         )
@@ -441,8 +428,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         preprocessed_data = self.preprocess_inputs(batch)
         model_inputs = self.prepare_eval_inputs(preprocessed_data, cfg_scale)
         xt = model_inputs.noise
+        mask = preprocessed_data.mask
+        edge = preprocessed_data.edge
+        raw_source = preprocessed_data.raw_source
         source = model_inputs.conditions[0]
-        mask = model_inputs.mask_latents
+        mask_latents = model_inputs.mask_latents
         noise = copy.deepcopy(model_inputs.noise)
 
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
@@ -476,15 +466,16 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     pred = (pred_norm / cfg_norm) * cfg_pred
 
                 if self.mask_denoise_infer:
-                    runtime_mask = mask.clone()
+                    runtime_mask = mask_latents.clone()
                     disable_mask_ids = (timestep < self.mask_denoise_steps[0]) | (self.mask_denoise_steps[1] < timestep)
                     runtime_mask[disable_mask_ids, ...] = 1.0
                     xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, runtime_mask, noise)
                 else:
-                    xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, mask, noise)
+                    xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, mask_latents, noise)
 
         output = QwenImageEditPlusPipeline._unpack_latents(
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
         )
         output = self.decode_image(output)
-        return {"mask": preprocessed_data.mask, "edge": preprocessed_data.edge, "output": output}
+        output = mask * output + (1.0 - mask) * raw_source
+        return {"mask": mask, "edge": edge, "output": output}
