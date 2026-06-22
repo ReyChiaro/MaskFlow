@@ -150,6 +150,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             "source": self.image_processor.preprocess(source, h, w).unsqueeze(2),
             "mask": self.image_processor.preprocess(mask, h, w).unsqueeze(2),
         }
+        raw_source = T.resize(source, [h, w], T.InterpolationMode.BILINEAR)
         mask = T.resize(mask, [h, w], T.InterpolationMode.NEAREST)
         edge = T.resize(edge, [h, w], T.InterpolationMode.NEAREST)
 
@@ -159,7 +160,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             vlm_conditions=vlm_conditions,
             dit_conditions=dit_conditions,
             target=target,
-            raw_source=source,
+            raw_source=raw_source,
             mask=mask,
             edge=edge,
         )
