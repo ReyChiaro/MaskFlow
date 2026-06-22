@@ -48,12 +48,12 @@ def _image_features(
     for start in range(0, len(images), batch_size):
         pixel_values = _preprocess_images(processor, images[start : start + batch_size], images.device)
         if model_id == CLIP_MODEL_ID:
-            batch_features = model.get_image_features(pixel_values=pixel_values)
+            outputs = model.get_image_features(pixel_values=pixel_values)
         else:
             outputs = model(pixel_values=pixel_values)
-            batch_features = getattr(outputs, "pooler_output", None)
-            if batch_features is None:
-                batch_features = outputs.last_hidden_state[:, 0]
+        batch_features = getattr(outputs, "pooler_output", None)
+        if batch_features is None:
+            batch_features = outputs.last_hidden_state[:, 0]
         features.append(F.normalize(batch_features.float(), dim=-1))
 
     return torch.cat(features, dim=0)
