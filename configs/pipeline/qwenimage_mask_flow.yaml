@@ -2,7 +2,6 @@ _target_: pipelines.qwenimage.qwenimage_mask_flow.QwenImageMaskFlow
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
-# cfg_dropout: 0.1
 
 mask_dilation_kernel: 25
 mask_blur_kernel: 25
@@ -14,12 +13,18 @@ edge_loss_weight: 0.0
 
 enable_vae_mask_encoding: true
 enable_masked_loss: true
-enable_pixel_blend: true
-
 mask_denoise_steps: [0.0, 1.0]
 mask_denoise_train: true
 mask_denoise_infer: true
-# inpainting_denoising_steps: 45
+
+enable_pixel_blend: true
+
+enable_poisson_train: true
+enable_poisson_infer: true
+poisson_steps: [0.0, 1.0]
+poisson_lambda_color: 0.1
+poisson_num_iter: 10
+poisson_momentum: 0.1
 
 fsdp_configs:
   transformer.transformer_blocks:

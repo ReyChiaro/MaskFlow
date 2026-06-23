@@ -289,7 +289,13 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             conds.append(mask_latents.clone())
 
         if self.enable_poisson_train:
-            tgt = self.poisson_refine(tgt, conds[0], mask_latents >= 1.0, mask_latents)
+            tgt = self.poisson_refine(
+                tgt,
+                conds[0],
+                mask_latents >= 1.0,
+                soft_M=mask_latents,
+                disable_progress_bar=True,
+            )
 
         image_shapes.append((1, tgt.shape[-2] // self.pacth_size, tgt.shape[-1] // self.pacth_size))
         image_shapes.extend([(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in conds])
@@ -553,6 +559,20 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
                     pred = (pred_norm / cfg_norm) * cfg_pred
 
+                if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() < self.poisson_steps[1]:
+                    # Predict clean endpoint
+                    x0_pred = self.scheduler.predict_x0(xt, curr_sigma, pred, source, mask_latents, noise)
+                    x0_dtype = x0_pred.dtype
+                    x0_pred = QwenImageEditPlusPipeline._unpack_latents(
+                        x0_pred, model_inputs.height, model_inputs.width, self.vae_scale_factor
+                    ).squeeze(2)
+
+                    x0_refined = self.poisson_refine(x0_pred, source4d, mask4d >= 1.0, soft_M=mask4d)
+                    x0_refined = QwenImageEditPlusPipeline._pack_latents(
+                        x0_refined, x0_refined.shape[0], x0_refined.shape[1], x0_refined.shape[-2], x0_refined.shape[-1]
+                    ).to(dtype=x0_dtype)
+                    pred = (xt - x0_refined) / curr_sigma.clamp_min(1e-4)
+
                 if self.enable_mask_denoise_infer:
                     # For inference, the mask will be changed in-place,
                     # so we must clone it for every timestep.
@@ -562,16 +582,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, runtime_mask, noise)
                 else:
                     xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, mask_latents, noise)
-
-                if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() < self.poisson_steps[1]:
-                    xt = QwenImageEditPlusPipeline._unpack_latents(
-                        xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
-                    ).squeeze(2)
-
-                    xt = self.poisson_refine(xt, source4d, mask4d >= 1.0, soft_M=mask4d)
-                    xt = QwenImageEditPlusPipeline._pack_latents(
-                        xt, xt.shape[0], xt.shape[1], xt.shape[-2], xt.shape[-1]
-                    )
 
         output = QwenImageEditPlusPipeline._unpack_latents(
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
