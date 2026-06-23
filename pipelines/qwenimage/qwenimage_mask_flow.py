@@ -139,6 +139,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         x_S: torch.Tensor,
         M: torch.Tensor,
         soft_M: torch.Tensor | None = None,
+        disable_progress_bar: bool = False,
     ):
         r"""
         Args
@@ -164,7 +165,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         diag = D + self.poisson_lambda_color
 
         # Solve linear
-        for _ in tqdm(range(self.poisson_num_iter), desc="Solve Poisson"):
+        for _ in tqdm(
+            range(self.poisson_num_iter),
+            desc="Solve Poisson",
+            disable=disable_progress_bar,
+        ):
             y_in = M * y
             nsum_y_in = self.neighbor_sum(y_in)
 
@@ -282,6 +287,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             conds.append(self.encode_image(dit_conditions["mask"], sample_mode))
         else:
             conds.append(mask_latents.clone())
+
+        if self.enable_poisson_train:
+            tgt = self.poisson_refine(tgt, conds[0], mask_latents >= 1.0, mask_latents)
 
         image_shapes.append((1, tgt.shape[-2] // self.pacth_size, tgt.shape[-1] // self.pacth_size))
         image_shapes.extend([(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in conds])
