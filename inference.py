@@ -160,9 +160,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mask-edge-width", type=int, default=50)
     parser.add_argument("--enable-vae-mask-encoding", type=str2bool, default=True)
     parser.add_argument("--enable-masked-loss", type=str2bool, default=True)
+    parser.add_argument("--enable-pixel-blend", type=str2bool, default=True)
     parser.add_argument("--mask-denoise-start", type=float, default=0.0)
     parser.add_argument("--mask-denoise-end", type=float, default=1.0)
     parser.add_argument("--mask-denoise-infer", type=str2bool, default=True)
+    parser.add_argument("--enable-poisson-infer", type=str2bool, default=False)
+    parser.add_argument("--poisson-start", type=float, default=0.0)
+    parser.add_argument("--poisson-end", type=float, default=0.0)
+    parser.add_argument("--poisson-lambda-color", type=float, default=0.1)
+    parser.add_argument("--poisson-num-iter", type=int, default=10)
+    parser.add_argument("--poisson-momentum", type=float, default=0.1)
 
     parser.add_argument("--weighting-scheme", default="logit_normal", choices=["logit_normal", "mode"])
     parser.add_argument("--logit-normal-mean", type=float, default=0.0)
@@ -188,6 +195,13 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
 
+    if args.mask_denoise_start > args.mask_denoise_end:
+        raise ValueError(
+            f"mask denoise start must be <= end, got [{args.mask_denoise_start}, {args.mask_denoise_end}]."
+        )
+    if args.poisson_start > args.poisson_end:
+        raise ValueError(f"poisson start must be <= end, got [{args.poisson_start}, {args.poisson_end}].")
+
     device = torch.device(args.device or ("cuda:0" if torch.cuda.is_available() else "cpu"))
     seed_everything(args.seed, device)
     generator = torch.Generator(device).manual_seed(args.seed)
@@ -205,9 +219,16 @@ def main():
         mask_edge_width=args.mask_edge_width,
         enable_vae_mask_encoding=args.enable_vae_mask_encoding,
         enable_masked_loss=args.enable_masked_loss,
+        enable_pixel_blend=args.enable_pixel_blend,
         mask_denoise_steps=[args.mask_denoise_start, args.mask_denoise_end],
         enable_mask_denoise_train=False,
         enable_mask_denoise_infer=args.mask_denoise_infer,
+        enable_poisson_train=False,
+        enable_poisson_infer=args.enable_poisson_infer,
+        poisson_steps=[args.poisson_start, args.poisson_end],
+        poisson_lambda_color=args.poisson_lambda_color,
+        poisson_num_iter=args.poisson_num_iter,
+        poisson_momentum=args.poisson_momentum,
     )
     pipe.transformer.requires_grad_(False)
     pipe.transformer.eval()
@@ -220,7 +241,8 @@ def main():
     batch = build_batch(args)
     logger.info(
         f"Run inference on {args.source} with {args.num_inference_steps} steps, "
-        f"cfg_scale={args.cfg_scale}, unmask_with={args.unmask_with}."
+        f"cfg_scale={args.cfg_scale}, unmask_with={args.unmask_with}, "
+        f"pixel_blend={args.enable_pixel_blend}, poisson_infer={args.enable_poisson_infer}."
     )
 
     with torch.inference_mode():
