@@ -154,7 +154,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--save-debug", action="store_true", help="Also save mask/edge/output tensors next to output.")
 
-    parser.add_argument("--mask-dilation-kernel", type=int, default=45)
+    parser.add_argument("--mask-dilation-kernel", type=int, default=25)
     parser.add_argument("--mask-blur-kernel", type=int, default=25)
     parser.add_argument("--mask-blur-sigma", type=float, default=25.0)
     parser.add_argument("--mask-edge-width", type=int, default=50)
