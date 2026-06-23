@@ -77,7 +77,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     enable_poisson_train: bool = True
     enable_poisson_infer: bool = True
     poisson_steps: list[float] = dataclasses.field(default_factory=list)
-    poisson_lambda_color: float = 0.1
+    poisson_in_color: float = 0.1
+    poisson_out_color: float = 0.1
     poisson_num_iter: int = 10
     poisson_momentum: float = 0.1
 
@@ -138,7 +139,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         g: torch.Tensor,
         x_S: torch.Tensor,
         M: torch.Tensor,
-        soft_M: torch.Tensor | None = None,
+        soft_M: torch.Tensor,
+        eps: float = 1e-6,
         disable_progress_bar: bool = False,
     ):
         r"""
@@ -150,19 +152,30 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         """
         B, C, H, W = g.shape
         M = M.float().expand(B, C, H, W)
+        soft_M = soft_M.float().expand(B, C, H, W)
 
         # Initialization
         y = M * g + (1.0 - M) * x_S
+
         D = self.neighbor_degree(g)
+        nsum_soft_M = self.neighbor_sum(soft_M)
+
+        weight_sum = 0.5 * soft_M * D + 0.5 * nsum_soft_M
+
         nsum_g = self.neighbor_sum(g)
-        div_g = D * g - nsum_g
+        nsum_g_soft_M = self.neighbor_sum(soft_M * g)
+        weighted_nsum_g = 0.5 * soft_M * nsum_g + 0.5 * nsum_g_soft_M
+
+        div_g = weight_sum * g - weighted_nsum_g
 
         x_S_out = (1.0 - M) * x_S
         nsum_x_S = self.neighbor_sum(x_S_out)
+        nsum_x_S_soft_M = self.neighbor_sum(soft_M * x_S_out)
+        soft_boundry = 0.5 * soft_M * nsum_x_S + 0.5 * nsum_x_S_soft_M
 
-        b = div_g + self.poisson_lambda_color * g + nsum_x_S
+        diag = weight_sum + self.poisson_in_color * soft_M + self.poisson_out_color * (1.0 - soft_M)
 
-        diag = D + self.poisson_lambda_color
+        b = div_g + soft_boundry + self.poisson_in_color * soft_M * g + self.poisson_out_color * (1.0 - soft_M) * x_S
 
         # Solve linear
         for _ in tqdm(
@@ -172,8 +185,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         ):
             y_in = M * y
             nsum_y_in = self.neighbor_sum(y_in)
+            nsum_y_in_soft_M = self.neighbor_sum(soft_M * y_in)
 
-            y_next = (nsum_y_in + b) / diag.clamp(min=1e-6)
+            y_next = (0.5 * soft_M * nsum_y_in + 0.5 * nsum_y_in_soft_M + b) / diag.clamp(min=eps)
 
             # Update masked area only
             y_next = M * y_next + (1.0 - M) * x_S
