@@ -50,7 +50,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.rank}") if args.rank >= 0 else torch.device("cpu")
-    evaluator = Evaluator(["SSIM-FG","SSIM-BG"], device)
+    evaluator = Evaluator(device=device)
 
     metric_content = "\n" + " Metrics ".center(70, "=")
     for k, fn in evaluator.metrics.items():
@@ -60,10 +60,9 @@ if __name__ == "__main__":
     metric_content += "\n" + "=" * 70
     logger.info(metric_content)
 
-    source = collect_images(args.source)[:100]
-    target = collect_images(args.target)[:100]
-    mask = collect_images(args.mask)[:100] if args.mask is not None else None
-    print(source, target, mask)
+    source = collect_images(args.source)
+    target = collect_images(args.target)
+    mask = collect_images(args.mask) if args.mask is not None else None
     save_to = args.save_to
 
     assert len(source) == len(target), f"Num of source and target should be equal."
