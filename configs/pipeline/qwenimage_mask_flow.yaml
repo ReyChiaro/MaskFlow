@@ -14,6 +14,8 @@ edge_loss_weight: 0.0
 
 enable_vae_mask_encoding: true
 enable_masked_loss: true
+enable_pixel_blend: true
+
 mask_denoise_steps: [0.0, 1.0]
 mask_denoise_train: true
 mask_denoise_infer: true
