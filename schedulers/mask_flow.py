@@ -48,7 +48,7 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
                 f"{self.unmask_with=} is not supported. Acceptable values are [target, source, noisy_target, noisy_source]."
             )
 
-        return xt.to(device, dtype=dtype)#, sigmas.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
+        return xt.to(device, dtype=dtype)  # , sigmas.to(device, dtype=dtype), timesteps.to(device, dtype=dtype)
 
     def add_noise(
         self,
@@ -99,3 +99,20 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
             xt = mask * xt + (1 - mask) * ((1.0 - next_sigma) * source + next_sigma * noise)
 
         return xt
+
+    def predict_x0(
+        self,
+        xt: torch.Tensor,
+        sigma: torch.Tensor,
+        v: torch.Tensor,
+        source: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+        noise: torch.Tensor | None = None,
+    ):
+        if source is None or mask is None or noise is None:
+            return xt - sigma * v
+        if self.unmask_with in ["source", "target"]:
+            xt = mask * xt + (1 - mask) * source
+        elif self.unmask_with in ["noisy_source", "noisy_target"]:
+            xt = mask * xt + (1 - mask) * ((1.0 - sigma) * source + sigma * noise)
+        return xt - sigma * v
