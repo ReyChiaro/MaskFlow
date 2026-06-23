@@ -22,7 +22,8 @@ enable_pixel_blend: true
 enable_poisson_train: true
 enable_poisson_infer: true
 poisson_steps: [0.0, 1.0]
-poisson_lambda_color: 0.1
+poisson_in_color: 0.1
+poisson_out_color: 0.1
 poisson_num_iter: 10
 poisson_momentum: 0.1
 

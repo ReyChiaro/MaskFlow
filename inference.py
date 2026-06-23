@@ -226,7 +226,7 @@ def main():
         enable_poisson_train=False,
         enable_poisson_infer=args.enable_poisson_infer,
         poisson_steps=[args.poisson_start, args.poisson_end],
-        poisson_lambda_color=args.poisson_lambda_color,
+        poisson_in_color=args.poisson_lambda_color,
         poisson_num_iter=args.poisson_num_iter,
         poisson_momentum=args.poisson_momentum,
     )
