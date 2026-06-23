@@ -206,8 +206,8 @@ def main():
         enable_vae_mask_encoding=args.enable_vae_mask_encoding,
         enable_masked_loss=args.enable_masked_loss,
         mask_denoise_steps=[args.mask_denoise_start, args.mask_denoise_end],
-        mask_denoise_train=False,
-        mask_denoise_infer=args.mask_denoise_infer,
+        enable_mask_denoise_train=False,
+        enable_mask_denoise_infer=args.mask_denoise_infer,
     )
     pipe.transformer.requires_grad_(False)
     pipe.transformer.eval()
