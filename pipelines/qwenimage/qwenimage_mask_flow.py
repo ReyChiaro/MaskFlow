@@ -32,6 +32,8 @@ class QwenMaskFlowPreprocessOutput(PreprocessOutput):
 @dataclasses.dataclass
 class QwenMaskFlowForwardOutput(QwenForwardOutput):
 
+    loss_weights: torch.Tensor | None = None
+
     # Mask and edge latents that are ``encoded'' by interpolation rather than VAE.
     mask_latents: torch.Tensor | None = None
     edge_latents: torch.Tensor | None = None
@@ -68,18 +70,19 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     enable_vae_mask_encoding: bool = True
 
     enable_masked_loss: bool = True
-    enable_mask_denoise_train: bool = True
-    enable_mask_denoise_infer: bool = True
-    mask_denoise_steps: list[float] = dataclasses.field(default_factory=list)
 
-    enable_pixel_blend: bool = True
+    enable_local_denoise_train: bool = False
+    enable_local_denoise_infer: bool = False
+    local_denoise_steps: list[float] = dataclasses.field(default_factory=list)
+
+    enable_pixel_blend: bool = False
 
     enable_poisson_train: bool = True
     enable_poisson_infer: bool = True
     poisson_steps: list[float] = dataclasses.field(default_factory=list)
-    poisson_in_color: float = 0.1
-    poisson_out_color: float = 0.1
-    poisson_num_iter: int = 10
+    poisson_lambda_e: float = 0.1
+    poisson_lambda_s: float = 0.1
+    poisson_num_iter: int = 50
     poisson_momentum: float = 0.1
 
     # ---------------- Mask Operations ---------------- #
@@ -173,9 +176,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         nsum_x_S_soft_M = self.neighbor_sum(soft_M * x_S_out)
         soft_boundry = 0.5 * soft_M * nsum_x_S + 0.5 * nsum_x_S_soft_M
 
-        diag = weight_sum + self.poisson_in_color * soft_M + self.poisson_out_color * (1.0 - soft_M)
+        diag = weight_sum + self.poisson_lambda_e * soft_M + self.poisson_lambda_s * (1.0 - soft_M)
 
-        b = div_g + soft_boundry + self.poisson_in_color * soft_M * g + self.poisson_out_color * (1.0 - soft_M) * x_S
+        b = div_g + soft_boundry + self.poisson_lambda_e * soft_M * g + self.poisson_lambda_s * (1.0 - soft_M) * x_S
 
         # Solve linear
         for _ in tqdm(
@@ -303,12 +306,17 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             conds.append(mask_latents.clone())
 
         if self.enable_poisson_train:
-            tgt = self.poisson_refine(
-                tgt,
-                conds[0],
-                mask_latents >= 1.0,
-                soft_M=mask_latents,
-                disable_progress_bar=True,
+            tgt_dtype = tgt.dtype
+            tgt = (
+                self.poisson_refine(
+                    tgt.squeeze(2),
+                    conds[0].squeeze(2),
+                    mask_latents.squeeze(2) >= 1.0,
+                    soft_M=mask_latents.squeeze(2),
+                    disable_progress_bar=True,
+                )
+                .unsqueeze(2)
+                .to(dtype=tgt_dtype)
             )
 
         image_shapes.append((1, tgt.shape[-2] // self.pacth_size, tgt.shape[-1] // self.pacth_size))
@@ -333,16 +341,16 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         source = cond_latents[0]
         noise = torch.randn_like(tgt, generator=self.generator)
         ts = self.scheduler.sample_timesteps(tgt.shape[0], self.generator, self.device)
-        sigmas = self.scheduler.get_sigmas(ts, img_seq_len=tgt.shape[1])
+        sigmas, loss_weights = self.scheduler.get_sigmas(ts, img_seq_len=tgt.shape[1], return_loss_weights=True)
 
-        if self.enable_mask_denoise_train:
+        if self.enable_local_denoise_train:
             # Apply masks to vector fields prediction, only the masked area will be added noise
             # If MaskFlow scheduler is applied, then the area outside of the mask will be replaced
             # with a deterministic item.
 
             # The disabled samples' masks will be replaced by full-one (edit all) masks,
             # thus the full images will be added noises.
-            disable_mask_ids = (sigmas < self.mask_denoise_steps[0]) | (self.mask_denoise_steps[1] < sigmas)
+            disable_mask_ids = (sigmas < self.local_denoise_steps[0]) | (self.local_denoise_steps[1] < sigmas)
 
             # Assign all-one masks to original mask.
             # NOTE: This will affect the mask_latents in future use (e.g. loss calculation).
@@ -350,6 +358,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             mask_ratio[disable_mask_ids, ...] = 1.0
         xt = self.scheduler.add_noise_by_sigmas(noise, tgt, sigmas, source, mask_latents)
         gt = self.scheduler.get_velocity(noise, tgt, source, mask_latents)
+        while loss_weights.ndim < xt.ndim:
+            loss_weights = loss_weights.unsqueeze(-1)
 
         return QwenMaskFlowForwardOutput(
             prompt_embeds=prompt_embeds,
@@ -360,6 +370,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             noised_target=xt,
             timesteps=sigmas,
             sigmas=sigmas,
+            loss_weights=loss_weights,
             ground_truth=gt,
             conditions=cond_latents,
             image_shapes=image_shapes,
@@ -460,6 +471,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         self,
         predictions: torch.Tensor,
         ground_truths: torch.Tensor,
+        loss_weights: torch.Tensor | None = None,
         mask_ratio: torch.Tensor | None = None,
         mask_latents: torch.Tensor | None = None,
         edge_latents: torch.Tensor | None = None,
@@ -479,6 +491,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             dict[str, Tensor]: The dict of different types losses.
         """
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
+        if loss_weights is not None:
+            loss_field = loss_weights * loss_field
         loss = None
         loss_dict = {}
 
@@ -520,6 +534,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         loss = self.compute_loss(
             predictions=predictions,
             ground_truths=model_inputs.ground_truth,
+            loss_weights=model_inputs.loss_weights,
             mask_ratio=model_inputs.mask_ratio,
             mask_latents=model_inputs.mask_latents,
             edge_latents=model_inputs.edge_latents,
@@ -587,11 +602,13 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     ).to(dtype=x0_dtype)
                     pred = (xt - x0_refined) / curr_sigma.clamp_min(1e-4)
 
-                if self.enable_mask_denoise_infer:
+                if self.enable_local_denoise_infer:
                     # For inference, the mask will be changed in-place,
                     # so we must clone it for every timestep.
                     runtime_mask = mask_latents.clone()
-                    disable_mask_ids = (timestep < self.mask_denoise_steps[0]) | (self.mask_denoise_steps[1] < timestep)
+                    disable_mask_ids = (timestep < self.local_denoise_steps[0]) | (
+                        self.local_denoise_steps[1] < timestep
+                    )
                     runtime_mask[disable_mask_ids, ...] = 1.0
                     xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, runtime_mask, noise)
                 else:

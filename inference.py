@@ -131,16 +131,19 @@ def save_outputs(outputs: dict[str, torch.Tensor], output_path: str | Path, save
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Single-image MaskFlow inference without Hydra configs.")
 
+    # Model
     parser.add_argument("--pretrained-model", required=True, help="Base Qwen-Image-Edit model path or HF id.")
+    parser.add_argument("--lora-path", default=None, help="Optional safetensors LoRA adapter directory or file.")
+    parser.add_argument("--adapter-name", default="maskflow", help="Adapter name used when loading LoRA.")
+
+    # User inputs
     parser.add_argument("--source", required=True, help="Source image path.")
     parser.add_argument("--mask", required=True, help="Mask image path; white area is edited.")
     parser.add_argument("--prompt", required=True, help="Edit prompt.")
     parser.add_argument("--negative-prompt", default="", help="Negative prompt for CFG.")
     parser.add_argument("--output", required=True, help="Output image path.")
 
-    parser.add_argument("--lora-path", default=None, help="Optional safetensors LoRA adapter directory or file.")
-    parser.add_argument("--adapter-name", default="maskflow", help="Adapter name used when loading LoRA.")
-
+    # Inference args
     parser.add_argument("--device", default=None, help="Torch device, e.g. cuda:0 or cpu.")
     parser.add_argument("--dtype", type=parse_dtype, default=torch.bfloat16, help="bf16, fp16, or fp32.")
     parser.add_argument("--seed", type=int, default=42)
@@ -154,23 +157,38 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--save-debug", action="store_true", help="Also save mask/edge/output tensors next to output.")
 
+    # Mask image edit args
     parser.add_argument("--mask-dilation-kernel", type=int, default=25)
     parser.add_argument("--mask-blur-kernel", type=int, default=25)
     parser.add_argument("--mask-blur-sigma", type=float, default=25.0)
     parser.add_argument("--mask-edge-width", type=int, default=50)
     parser.add_argument("--enable-vae-mask-encoding", type=str2bool, default=True)
     parser.add_argument("--enable-masked-loss", type=str2bool, default=True)
-    parser.add_argument("--enable-pixel-blend", type=str2bool, default=True)
-    parser.add_argument("--mask-denoise-start", type=float, default=0.0)
-    parser.add_argument("--mask-denoise-end", type=float, default=1.0)
-    parser.add_argument("--mask-denoise-infer", type=str2bool, default=True)
-    parser.add_argument("--enable-poisson-infer", type=str2bool, default=False)
+    parser.add_argument("--enable-pixel-blend", type=str2bool, default=False)
+    parser.add_argument("--enable-local-denoise-infer", type=str2bool, default=False)
+    parser.add_argument("--local-denoise-start", type=float, default=0.0)
+    parser.add_argument("--local-denoise-end", type=float, default=1.0)
+
+    # Poisson refinement args
+    parser.add_argument("--enable-poisson-infer", type=str2bool, default=True)
     parser.add_argument("--poisson-start", type=float, default=0.0)
-    parser.add_argument("--poisson-end", type=float, default=0.0)
-    parser.add_argument("--poisson-lambda-color", type=float, default=0.1)
-    parser.add_argument("--poisson-num-iter", type=int, default=10)
+    parser.add_argument("--poisson-end", type=float, default=1.0)
+    parser.add_argument(
+        "--poisson-lambda-e",
+        type=float,
+        default=0.1,
+        help="lambda_e used for color consistency between masked area and foreground.",
+    )
+    parser.add_argument(
+        "--poisson-lambda-s",
+        type=float,
+        default=1.0,
+        help="lambda_s used for color consistency between masked area and background.",
+    )
+    parser.add_argument("--poisson-num-iter", type=int, default=50)
     parser.add_argument("--poisson-momentum", type=float, default=0.1)
 
+    # Timestep/sigma scheduler
     parser.add_argument("--weighting-scheme", default="logit_normal", choices=["logit_normal", "mode"])
     parser.add_argument("--logit-normal-mean", type=float, default=0.0)
     parser.add_argument("--logit-normal-std", type=float, default=1.0)
@@ -195,7 +213,7 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
 
-    if args.mask_denoise_start > args.mask_denoise_end:
+    if args.local_denoise_start > args.local_denoise_end:
         raise ValueError(
             f"mask denoise start must be <= end, got [{args.mask_denoise_start}, {args.mask_denoise_end}]."
         )
@@ -220,13 +238,14 @@ def main():
         enable_vae_mask_encoding=args.enable_vae_mask_encoding,
         enable_masked_loss=args.enable_masked_loss,
         enable_pixel_blend=args.enable_pixel_blend,
-        mask_denoise_steps=[args.mask_denoise_start, args.mask_denoise_end],
-        enable_mask_denoise_train=False,
-        enable_mask_denoise_infer=args.mask_denoise_infer,
+        local_denoise_steps=[args.local_denoise_start, args.local_denoise_end],
+        enable_local_denoise_train=False,
+        enable_local_denoise_infer=args.enable_local_denoise_infer,
         enable_poisson_train=False,
         enable_poisson_infer=args.enable_poisson_infer,
         poisson_steps=[args.poisson_start, args.poisson_end],
-        poisson_in_color=args.poisson_lambda_color,
+        poisson_lambda_e=args.poisson_lambda_e,
+        poisson_lambda_s=args.poisson_lambda_s,
         poisson_num_iter=args.poisson_num_iter,
         poisson_momentum=args.poisson_momentum,
     )

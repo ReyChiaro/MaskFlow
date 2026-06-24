@@ -12,19 +12,21 @@ mask_loss_weight: 1.0
 edge_loss_weight: 0.0
 
 enable_vae_mask_encoding: true
-enable_masked_loss: true
-mask_denoise_steps: [0.0, 1.0]
-mask_denoise_train: true
-mask_denoise_infer: true
 
-enable_pixel_blend: true
+enable_masked_loss: true
+
+enable_local_denoise_train: false
+enable_local_denoise_infer: false
+local_denoise_steps: [0.0, 1.0]
+
+enable_pixel_blend: false
 
 enable_poisson_train: true
 enable_poisson_infer: true
 poisson_steps: [0.0, 1.0]
-poisson_in_color: 0.1
-poisson_out_color: 0.1
-poisson_num_iter: 10
+poisson_lambda_e: 0.1
+poisson_lambda_s: 0.1
+poisson_num_iter: 50
 poisson_momentum: 0.1
 
 fsdp_configs:
