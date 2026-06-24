@@ -27,7 +27,7 @@ scripts/utils/*
 dataset/
 deprecated/
 multi_threads_logs/
-ablations/
+**ablations/
 evaluations/
 _test*.py
 *.jsonl
