@@ -434,6 +434,13 @@ class BaseTrainer:
     def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
         return batch
 
+    def on_train_end(self, global_step: int):
+        r"""
+        Hook for trainers to export or finalize artifacts before destroying
+        the distributed process group.
+        """
+        pass
+
     def train(self):
         r"""
         Train pipeline.
@@ -511,6 +518,8 @@ class BaseTrainer:
             if global_step >= self.max_training_steps:
                 break
 
+        self.on_train_end(global_step)
+        wait_for_everyone()
         dist.destroy_process_group()
         logger.info(f"🌊 Training Finished.")
 
