@@ -13,7 +13,7 @@ torchrun \
     finetune.py \
     --config-path=configs \
     --config-name=train \
-    project.project_name="_test_maskflow_lora" \
+    project.project_name="maskflow-baseline" \
     trainset=mask_edit \
     evalset=mask_edit \
     trainset.image_root=$IMAGE_ROOT \
@@ -51,8 +51,8 @@ torchrun \
     trainer.cfg_scale=4.0 \
     trainer.cfg_dropout=0 \
     trainer.max_training_steps=10000 \
-    trainer.save_steps=1 \
-    trainer.eval_steps=1 \
+    trainer.save_steps=1000 \
+    trainer.eval_steps=2500 \
     trainer.mixed_precision=bf16 \
     trainer.enable_gradient_checkpoint=true \
     trainer.gradient_accumulation_steps=1 \
