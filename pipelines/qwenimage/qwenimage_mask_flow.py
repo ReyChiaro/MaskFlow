@@ -341,7 +341,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         source = cond_latents[0]
         noise = torch.randn_like(tgt, generator=self.generator)
         ts = self.scheduler.sample_timesteps(tgt.shape[0], self.generator, self.device)
-        sigmas, loss_weights = self.scheduler.get_sigmas(ts, img_seq_len=tgt.shape[1], return_loss_weights=True)
+        sigmas, loss_weights = self.scheduler.get_sigmas(ts, img_seq_len=tgt.shape[1], return_d_sigmas_dt=True)
 
         if self.enable_local_denoise_train:
             # Apply masks to vector fields prediction, only the masked area will be added noise
@@ -490,9 +490,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         Return
             dict[str, Tensor]: The dict of different types losses.
         """
-        loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         if loss_weights is not None:
-            loss_field = loss_weights * loss_field
+            ground_truths = loss_weights * ground_truths
+
+        loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         loss = None
         loss_dict = {}
 
@@ -560,7 +561,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         ).squeeze(2)
 
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
-            for t, curr_sigma, next_sigma in tqdm(inferencer, total=num_inference_steps):
+            for t, curr_sigma, next_sigma, d_sigma_dt in tqdm(inferencer, total=num_inference_steps):
                 hidden_states = torch.cat([xt] + [c for c in model_inputs.conditions], dim=1)
                 timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
 
@@ -590,7 +591,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
                 if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() < self.poisson_steps[1]:
                     # Predict clean endpoint
-                    x0_pred = self.scheduler.predict_x0(xt, curr_sigma, pred, source, mask_latents, noise)
+                    x0_pred = self.scheduler.predict_x0(xt, curr_sigma, d_sigma_dt, pred, source, mask_latents, noise)
                     x0_dtype = x0_pred.dtype
                     x0_pred = QwenImageEditPlusPipeline._unpack_latents(
                         x0_pred, model_inputs.height, model_inputs.width, self.vae_scale_factor
@@ -600,7 +601,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     x0_refined = QwenImageEditPlusPipeline._pack_latents(
                         x0_refined, x0_refined.shape[0], x0_refined.shape[1], x0_refined.shape[-2], x0_refined.shape[-1]
                     ).to(dtype=x0_dtype)
-                    pred = (xt - x0_refined) / curr_sigma.clamp_min(1e-4)
+                    pred = (xt - x0_refined) * d_sigma_dt / curr_sigma.clamp_min(1e-4)
 
                 if self.enable_local_denoise_infer:
                     # For inference, the mask will be changed in-place,
