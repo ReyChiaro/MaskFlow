@@ -57,7 +57,7 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         source: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ):
-        sigmas = self.get_sigmas(t, img_seq_len=x0.shape[1], return_loss_weights=False)
+        sigmas = self.get_sigmas(t, img_seq_len=x0.shape[1], return_d_sigmas_dt=False)
         return self.add_noise_by_sigmas(noise, x0, sigmas, source, mask)
 
     def get_velocity(self, noise, x0, source: torch.Tensor | None = None, mask: torch.Tensor | None = None):
@@ -83,14 +83,15 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         vt,
         curr_sigma,
         next_sigma,
+        d_sigma_dt,
         source: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
     ):
         if source is None or mask is None or noise is None:
-            return super().step(xt, vt, curr_sigma, next_sigma)
+            return super().step(xt, vt, curr_sigma, next_sigma, d_sigma_dt)
 
-        xt = super().step(xt, vt, curr_sigma, next_sigma)
+        xt = super().step(xt, vt, curr_sigma, next_sigma, d_sigma_dt)
 
         if self.unmask_with in ["source", "target"]:
             xt = mask * xt + (1 - mask) * source
@@ -103,15 +104,16 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         self,
         xt: torch.Tensor,
         sigma: torch.Tensor,
+        d_sigma_dt: torch.Tensor,
         v: torch.Tensor,
         source: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
     ):
         if source is None or mask is None or noise is None:
-            return xt - sigma * v
+            return xt - (sigma / d_sigma_dt) * v
         if self.unmask_with in ["source", "target"]:
             xt = mask * xt + (1 - mask) * source
         elif self.unmask_with in ["noisy_source", "noisy_target"]:
             xt = mask * xt + (1 - mask) * ((1.0 - sigma) * source + sigma * noise)
-        return xt - sigma * v
+        return xt - (sigma / d_sigma_dt) * v
