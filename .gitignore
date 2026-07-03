@@ -21,6 +21,7 @@ outputs/
 .env
 tools/
 pretrained_weights/
+ablation_experiments/
 scripts/inference/
 scripts/utils/*
 !scripts/utils/split_eval_data.py

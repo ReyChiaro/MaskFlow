@@ -87,7 +87,9 @@ if __name__ == "__main__":
             Path(source[i]).stem == Path(target[i]).stem
         ), f"source {Path(source[i]).stem} not match to target {Path(target[i]).stem}."
         source_image = T.to_tensor(Image.open(source[i]).convert("RGB")).clamp(0.0, 1.0)
-        target_image = T.to_tensor(Image.open(target[i]).convert("RGB")).clamp(0.0, 1.0)
+        target_image = T.resize(T.to_tensor(Image.open(target[i]).convert("RGB")), [*source_image.shape[-2:]]).clamp(
+            0.0, 1.0
+        )
         target_tensors.append(target_image)
         source_tensors.append(source_image)
         if mask is not None:
