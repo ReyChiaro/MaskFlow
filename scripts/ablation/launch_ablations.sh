@@ -208,11 +208,8 @@ run_one_exp() {
     shift 4
 
     local nproc_per_node=${GPUS_PER_TASK}
-    local project_timestamp
-    project_timestamp=$(date +'%Y%m%d-%H%M%S')
     local overrides=(
         "project.project_name=${exp_name}"
-        "project.timestamp=${project_timestamp}"
         "${COMMON_OVERRIDES[@]}"
         "$@"
         "${GLOBAL_EXTRA_OVERRIDES[@]}"
@@ -237,7 +234,6 @@ run_one_exp() {
         echo "[Dry Run] ${DRY_RUN}"
         echo "[GPUs] ${visible_gpus}"
         echo "[Master Port] ${master_port}"
-        echo "[Project Timestamp] ${project_timestamp}"
         echo "[Command]"
         printf 'HYDRA_FULL_ERROR=1 CUDA_VISIBLE_DEVICES=%q OMP_NUM_THREADS=%q MASTER_PORT=%q ' \
             "${visible_gpus}" "${OMP_NUM_THREADS}" "${master_port}"

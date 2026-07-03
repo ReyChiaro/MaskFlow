@@ -13,7 +13,7 @@ torchrun \
     finetune.py \
     --config-path=configs \
     --config-name=train \
-    project.project_name="_test_maskflow_lora" \
+    project.project_name="maskflow" \
     trainset=mask_edit \
     evalset=mask_edit \
     trainset.image_root=$IMAGE_ROOT \
@@ -30,14 +30,14 @@ torchrun \
     pipeline.edge_loss_weight=0 \
     pipeline.enable_vae_mask_encoding=true \
     pipeline.enable_masked_loss=true \
-    pipeline.enable_local_denoise_train=false \
-    pipeline.enable_local_denoise_infer=false \
-    pipeline.local_denoise_steps="[0.1,1.0]" \
-    pipeline.enable_pixel_blend=false \
+    pipeline.enable_local_denoise_train=true \
+    pipeline.enable_local_denoise_infer=true \
+    pipeline.local_denoise_steps="[0.0,1.0]" \
+    pipeline.enable_pixel_blend=true \
     pipeline.enable_poisson_train=true \
     pipeline.enable_poisson_infer=true \
     pipeline.poisson_steps="[0.0,1.0]" \
-    pipeline.poisson_lambda_e=0.1 \
+    pipeline.poisson_lambda_e=1.0 \
     pipeline.poisson_lambda_s=1.0 \
     pipeline.poisson_num_iter=50 \
     pipeline.poisson_momentum=0.1 \
@@ -50,9 +50,9 @@ torchrun \
     trainer.base_seed=42 \
     trainer.cfg_scale=4.0 \
     trainer.cfg_dropout=0 \
-    trainer.max_training_steps=10000 \
-    trainer.save_steps=1 \
-    trainer.eval_steps=1 \
+    trainer.max_training_steps=5000 \
+    trainer.save_steps=1000 \
+    trainer.eval_steps=50 \
     trainer.mixed_precision=bf16 \
     trainer.enable_gradient_checkpoint=true \
     trainer.gradient_accumulation_steps=1 \

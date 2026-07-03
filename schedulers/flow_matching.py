@@ -46,20 +46,22 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
     def time_shift(self, t: torch.Tensor, mu: float) -> tuple[torch.Tensor, torch.Tensor]:
         if self.time_shift_type == "exponential":
             sigmas = np.exp(mu) / (np.exp(mu) + (1.0 / t - 1) ** self.shift_power)
-            loss_weights = (sigmas / t) ** 2 / np.exp(mu) * ((1.0 / t - 1) ** (self.shift_power - 1))
+            d_sigmas_dt = (
+                (self.shift_power / np.exp(mu)) * ((sigmas / t) ** 2) * ((1.0 / t - 1) ** (self.shift_power - 1))
+            )
         elif self.time_shift_type == "linear":
             sigmas = mu / (mu + (1.0 / t - 1) ** self.shift_power)
-            loss_weights = (sigmas / t) ** 2 / mu * ((1.0 / t - 1) ** (self.shift_power - 1))
+            d_sigmas_dt = (self.shift_power / mu) * ((sigmas / t) ** 2) * ((1.0 / t - 1) ** (self.shift_power - 1))
         else:
             sigmas = t
-            loss_weights = torch.ones_like(sigmas)
-        return sigmas.to(t.device, dtype=t.dtype), loss_weights.to(t.device, dtype=t.dtype)
+            d_sigmas_dt = torch.ones_like(sigmas)
+        return sigmas.to(t.device, dtype=t.dtype), d_sigmas_dt.to(t.device, dtype=t.dtype)
 
     def get_sigmas(
         self,
         t: torch.Tensor,
         img_seq_len: int | None = None,
-        return_loss_weights: bool = False,
+        return_d_sigmas_dt: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if self.use_dynamic_shifting:
             if img_seq_len is None:
@@ -67,9 +69,9 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
             mu = self.calculate_shift_mu(img_seq_len)
         else:
             mu = self.shift_mu
-        sigmas, loss_weights = self.time_shift(t, mu)
-        if return_loss_weights:
-            return sigmas, loss_weights
+        sigmas, d_sigmas_dt = self.time_shift(t, mu)
+        if return_d_sigmas_dt:
+            return sigmas, d_sigmas_dt
         return sigmas
 
     def add_noise_by_sigmas(self, noise: torch.Tensor, x0: torch.Tensor, sigmas: torch.Tensor):
@@ -83,27 +85,37 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
 
     def add_noise(self, noise: torch.Tensor, x0: torch.Tensor, t: torch.Tensor):
         # WARN: Deprecated
-        sigmas = self.get_sigmas(t, img_seq_len=x0.shape[1], return_loss_weights=False)
+        sigmas = self.get_sigmas(t, img_seq_len=x0.shape[1], return_d_sigmas_dt=False)
         return self.add_noise_by_sigmas(noise, x0, sigmas)
 
     def get_velocity(self, noise: torch.Tensor, x0: torch.Tensor):
         return noise - x0
 
-    def step(self, xt: torch.Tensor, vt: torch.Tensor, curr_sigma: torch.Tensor, next_sigma: torch.Tensor):
+    def step(
+        self,
+        xt: torch.Tensor,
+        vt: torch.Tensor,
+        curr_sigma: torch.Tensor,
+        next_sigma: torch.Tensor,
+        d_sigma_dt: torch.Tensor,
+    ):
         dtype = xt.dtype
-        return (xt.float() + (next_sigma - curr_sigma) * vt).to(dtype=dtype)
+        return (xt.float() + (next_sigma - curr_sigma) / d_sigma_dt * vt).to(dtype=dtype)
 
     def _inference(self, num_inference_steps: int, img_seq_len: int | None = None):
         timesteps = torch.from_numpy(
             np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps, endpoint=True)
         ).float()
-        sigmas = self.get_sigmas(timesteps, img_seq_len, return_loss_weights=False).float()
+        sigmas, d_sigmas_dt = self.get_sigmas(timesteps, img_seq_len, return_d_sigmas_dt=True)
+        sigmas = sigmas.float()
+        d_sigmas_dt = d_sigmas_dt.float()
         sigmas = torch.cat([sigmas, torch.zeros((1,))])
 
         for step in range(num_inference_steps):
             curr_sigma = sigmas[step]
             next_sigma = sigmas[step + 1]
-            yield sigmas[step : step + 1], curr_sigma, next_sigma
+            d_sigma_dt = d_sigmas_dt[step]
+            yield sigmas[step : step + 1], curr_sigma, next_sigma, d_sigma_dt
 
     @contextmanager
     def inference(self, num_inference_steps: int, img_seq_len: int | None = None):

@@ -47,7 +47,7 @@ prompt_sampler_cfgs:
   # linear-decay | const-linear
   start_p: 1.0
   end_p: 0.2
-  total_step: ${trainer.max_training_steps}
+  total_steps: ${trainer.max_training_steps}
 
   # const-linear
   decay_start_step: 1000
