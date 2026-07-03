@@ -83,14 +83,15 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         vt,
         curr_sigma,
         next_sigma,
+        d_sigma_dt,
         source: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
     ):
         if source is None or mask is None or noise is None:
-            return super().step(xt, vt, curr_sigma, next_sigma)
+            return super().step(xt, vt, curr_sigma, next_sigma, d_sigma_dt)
 
-        xt = super().step(xt, vt, curr_sigma, next_sigma)
+        xt = super().step(xt, vt, curr_sigma, next_sigma, d_sigma_dt)
 
         if self.unmask_with in ["source", "target"]:
             xt = mask * xt + (1 - mask) * source

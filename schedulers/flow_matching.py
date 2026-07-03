@@ -46,10 +46,12 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
     def time_shift(self, t: torch.Tensor, mu: float) -> tuple[torch.Tensor, torch.Tensor]:
         if self.time_shift_type == "exponential":
             sigmas = np.exp(mu) / (np.exp(mu) + (1.0 / t - 1) ** self.shift_power)
-            d_sigmas_dt = (sigmas / t) ** 2 / np.exp(mu) * ((1.0 / t - 1) ** (self.shift_power - 1))
+            d_sigmas_dt = (
+                (self.shift_power / np.exp(mu)) * ((sigmas / t) ** 2) * ((1.0 / t - 1) ** (self.shift_power - 1))
+            )
         elif self.time_shift_type == "linear":
             sigmas = mu / (mu + (1.0 / t - 1) ** self.shift_power)
-            d_sigmas_dt = (sigmas / t) ** 2 / mu * ((1.0 / t - 1) ** (self.shift_power - 1))
+            d_sigmas_dt = (self.shift_power / mu) * ((sigmas / t) ** 2) * ((1.0 / t - 1) ** (self.shift_power - 1))
         else:
             sigmas = t
             d_sigmas_dt = torch.ones_like(sigmas)
@@ -89,9 +91,16 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
     def get_velocity(self, noise: torch.Tensor, x0: torch.Tensor):
         return noise - x0
 
-    def step(self, xt: torch.Tensor, vt: torch.Tensor, curr_sigma: torch.Tensor, next_sigma: torch.Tensor):
+    def step(
+        self,
+        xt: torch.Tensor,
+        vt: torch.Tensor,
+        curr_sigma: torch.Tensor,
+        next_sigma: torch.Tensor,
+        d_sigma_dt: torch.Tensor,
+    ):
         dtype = xt.dtype
-        return (xt.float() + (next_sigma - curr_sigma) * vt).to(dtype=dtype)
+        return (xt.float() + (next_sigma - curr_sigma) / d_sigma_dt * vt).to(dtype=dtype)
 
     def _inference(self, num_inference_steps: int, img_seq_len: int | None = None):
         timesteps = torch.from_numpy(

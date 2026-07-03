@@ -490,12 +490,14 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         Return
             dict[str, Tensor]: The dict of different types losses.
         """
+        loss_dict = {}
         if loss_weights is not None:
-            ground_truths = loss_weights * ground_truths
+            # ground_truths = loss_weights * ground_truths
+            loss_dict["loss_weights"] = loss_weights.mean()
+
 
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         loss = None
-        loss_dict = {}
 
         if self.enable_masked_loss:
             if mask_latents is not None:
@@ -611,9 +613,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                         self.local_denoise_steps[1] < timestep
                     )
                     runtime_mask[disable_mask_ids, ...] = 1.0
-                    xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, runtime_mask, noise)
+                    xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, d_sigma_dt, source, runtime_mask, noise)
                 else:
-                    xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, source, mask_latents, noise)
+                    xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, d_sigma_dt, source, mask_latents, noise)
 
         output = QwenImageEditPlusPipeline._unpack_latents(
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
