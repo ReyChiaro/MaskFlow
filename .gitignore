@@ -44,3 +44,5 @@ _[!_]*.py
 *.pt
 *.distcp
 *.tar
+
+toy_poisson_probability_field.py
