@@ -100,7 +100,8 @@ class RectifiedFlowMatchingScheduler(BaseScheduler):
         d_sigma_dt: torch.Tensor,
     ):
         dtype = xt.dtype
-        return (xt.float() + (next_sigma - curr_sigma) / d_sigma_dt * vt).to(dtype=dtype)
+        return (xt.float() + (next_sigma - curr_sigma) * vt).to(dtype=dtype)
+        # return (xt.float() + (next_sigma - curr_sigma) / d_sigma_dt * vt).to(dtype=dtype)
 
     def _inference(self, num_inference_steps: int, img_seq_len: int | None = None):
         timesteps = torch.from_numpy(
