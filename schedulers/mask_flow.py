@@ -111,9 +111,11 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         noise: torch.Tensor | None = None,
     ):
         if source is None or mask is None or noise is None:
+            # return xt - sigma * v
             return xt - (sigma / d_sigma_dt) * v
         if self.unmask_with in ["source", "target"]:
             xt = mask * xt + (1 - mask) * source
         elif self.unmask_with in ["noisy_source", "noisy_target"]:
             xt = mask * xt + (1 - mask) * ((1.0 - sigma) * source + sigma * noise)
+        # return xt - sigma * v
         return xt - (sigma / d_sigma_dt) * v

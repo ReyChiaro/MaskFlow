@@ -1,7 +1,7 @@
 r: 256
 lora_alpha: 256
 lora_dropout: 0
-adapter_name: mask_flow
+adapter_name: maskflow
 target_modules: [
   "attn.to_q",
   "attn.to_k",
