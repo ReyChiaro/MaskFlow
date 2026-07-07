@@ -9,11 +9,11 @@ torchrun \
     --nnodes=1 \
     --nproc-per-node=1 \
     --master-addr 127.0.0.1 \
-    --master-port 29666 \
+    --master-port 29676 \
     finetune.py \
     --config-path=configs \
     --config-name=train \
-    project.project_name="maskflow" \
+    project.project_name="maskflow-linear_decay_0.8_0.2" \
     trainset=mask_edit \
     evalset=mask_edit \
     trainset.image_root=$IMAGE_ROOT \
@@ -30,8 +30,8 @@ torchrun \
     pipeline.edge_loss_weight=0 \
     pipeline.enable_vae_mask_encoding=true \
     pipeline.enable_masked_loss=true \
-    pipeline.enable_local_denoise_train=true \
-    pipeline.enable_local_denoise_infer=true \
+    pipeline.enable_local_denoise_train=false \
+    pipeline.enable_local_denoise_infer=false \
     pipeline.local_denoise_steps="[0.0,1.0]" \
     pipeline.enable_pixel_blend=true \
     pipeline.enable_poisson_train=true \
@@ -49,10 +49,10 @@ torchrun \
     trainer.enable_save_optimizer=false \
     trainer.base_seed=42 \
     trainer.cfg_scale=4.0 \
-    trainer.cfg_dropout=0 \
+    trainer.cfg_dropout=0.1 \
     trainer.max_training_steps=5000 \
     trainer.save_steps=1000 \
-    trainer.eval_steps=50 \
+    trainer.eval_steps=2500 \
     trainer.mixed_precision=bf16 \
     trainer.enable_gradient_checkpoint=true \
     trainer.gradient_accumulation_steps=1 \
@@ -60,5 +60,6 @@ torchrun \
     trainer.num_inference_steps=50 \
     trainer.fsdp_strategy=no_shard \
     trainer.prompt_sampler_cfgs.name=linear-decay \
-    trainer.prompt_sampler_cfgs.start_p=1.0 \
-    trainer.prompt_sampler_cfgs.end_p=0.0 \
+    trainer.prompt_sampler_cfgs.p=0 \
+    trainer.prompt_sampler_cfgs.start_p=0.8 \
+    trainer.prompt_sampler_cfgs.end_p=0.2 \

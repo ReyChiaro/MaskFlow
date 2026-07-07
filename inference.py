@@ -149,12 +149,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-inference-steps", type=int, default=50)
     parser.add_argument("--cfg-scale", type=float, default=1.0)
-    parser.add_argument(
-        "--mask-threshold",
-        type=float,
-        default=0.5,
-        help="Binarize mask at this threshold; set a negative value to keep soft grayscale mask.",
-    )
+    parser.add_argument("--mask-threshold", type=float, default=0.5)
     parser.add_argument("--save-debug", action="store_true", help="Also save mask/edge/output tensors next to output.")
 
     # Mask image edit args
@@ -173,18 +168,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-poisson-infer", type=str2bool, default=True)
     parser.add_argument("--poisson-start", type=float, default=0.0)
     parser.add_argument("--poisson-end", type=float, default=1.0)
-    parser.add_argument(
-        "--poisson-lambda-e",
-        type=float,
-        default=0.1,
-        help="lambda_e used for color consistency between masked area and foreground.",
-    )
-    parser.add_argument(
-        "--poisson-lambda-s",
-        type=float,
-        default=1.0,
-        help="lambda_s used for color consistency between masked area and background.",
-    )
+    parser.add_argument("--poisson-lambda-e", type=float, default=0.1)
+    parser.add_argument("--poisson-lambda-s", type=float, default=1.0)
     parser.add_argument("--poisson-num-iter", type=int, default=50)
     parser.add_argument("--poisson-momentum", type=float, default=0.1)
 
