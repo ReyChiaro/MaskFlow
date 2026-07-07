@@ -46,3 +46,4 @@ _[!_]*.py
 *.tar
 
 toy_poisson_probability_field.py
+figs/
