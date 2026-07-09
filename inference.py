@@ -10,8 +10,18 @@ from loguru import logger
 from PIL import Image
 from torchvision.utils import save_image
 
+from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus
 from pipelines.qwenimage.qwenimage_mask_flow import QwenImageMaskFlow
-from schedulers import MaskFlowScheduler
+from schedulers import MaskFlowScheduler, RectifiedFlowMatchingScheduler
+
+
+PIPELINE_ALIASES = {
+    "qwenimage_mask_flow": "qwenimage_mask_flow",
+    "maskflow": "qwenimage_mask_flow",
+    "qwenimage_edit_plus": "qwenimage_edit_plus",
+    "qwenimage_edit_plus_2511": "qwenimage_edit_plus",
+    "edit_plus": "qwenimage_edit_plus",
+}
 
 
 def str2bool(value: str | bool) -> bool:
@@ -60,8 +70,8 @@ def load_mask_tensor(path: str | Path, threshold: float | None = 0.5) -> torch.T
     return mask.repeat(3, 1, 1)
 
 
-def build_scheduler(args: argparse.Namespace) -> MaskFlowScheduler:
-    return MaskFlowScheduler(
+def build_scheduler(args: argparse.Namespace) -> RectifiedFlowMatchingScheduler:
+    scheduler_kwargs = dict(
         weighting_scheme=args.weighting_scheme,
         logit_normal_mean=args.logit_normal_mean,
         logit_normal_std=args.logit_normal_std,
@@ -74,11 +84,51 @@ def build_scheduler(args: argparse.Namespace) -> MaskFlowScheduler:
         shift_power=args.shift_power,
         time_shift_type=args.time_shift_type,
         use_dynamic_shifting=args.use_dynamic_shifting,
-        unmask_with=args.unmask_with,
+    )
+    if args.pipeline == "qwenimage_mask_flow":
+        return MaskFlowScheduler(**scheduler_kwargs, unmask_with=args.unmask_with)
+    return RectifiedFlowMatchingScheduler(**scheduler_kwargs)
+
+
+def build_pipeline(
+    args: argparse.Namespace,
+    scheduler: RectifiedFlowMatchingScheduler,
+    generator: torch.Generator,
+    device: torch.device,
+):
+    common_kwargs = dict(
+        pretrained_model=args.pretrained_model,
+        scheduler=scheduler,
+        generator=generator,
+        device=device,
+        dtype=args.dtype,
+    )
+    if args.pipeline == "qwenimage_edit_plus":
+        return QwenImageEditPlus(**common_kwargs)
+
+    return QwenImageMaskFlow(
+        **common_kwargs,
+        mask_dilation_kernel=args.mask_dilation_kernel,
+        mask_blur_kernel=args.mask_blur_kernel,
+        mask_blur_sigma=args.mask_blur_sigma,
+        mask_edge_width=args.mask_edge_width,
+        enable_vae_mask_encoding=args.enable_vae_mask_encoding,
+        enable_masked_loss=args.enable_masked_loss,
+        enable_pixel_blend=args.enable_pixel_blend,
+        local_denoise_steps=[args.local_denoise_start, args.local_denoise_end],
+        enable_local_denoise_train=False,
+        enable_local_denoise_infer=args.enable_local_denoise_infer,
+        enable_poisson_train=False,
+        enable_poisson_infer=args.enable_poisson_infer,
+        poisson_steps=[args.poisson_start, args.poisson_end],
+        poisson_lambda_e=args.poisson_lambda_e,
+        poisson_lambda_s=args.poisson_lambda_s,
+        poisson_num_iter=args.poisson_num_iter,
+        poisson_momentum=args.poisson_momentum,
     )
 
 
-def load_lora_adapter(pipe: QwenImageMaskFlow, args: argparse.Namespace):
+def load_lora_adapter(pipe: QwenImageEditPlus, args: argparse.Namespace):
     if args.lora_path is None:
         logger.info("No LoRA adapter provided; run with base model weights.")
         return
@@ -129,9 +179,15 @@ def save_outputs(outputs: dict[str, torch.Tensor], output_path: str | Path, save
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Single-image MaskFlow inference without Hydra configs.")
+    parser = argparse.ArgumentParser(description="Single-image Qwen-Image inference without Hydra configs.")
 
     # Model
+    parser.add_argument(
+        "--pipeline",
+        default="qwenimage_mask_flow",
+        choices=sorted(PIPELINE_ALIASES),
+        help="Pipeline to run. Defaults to qwenimage_mask_flow.",
+    )
     parser.add_argument("--pretrained-model", required=True, help="Base Qwen-Image-Edit model path or HF id.")
     parser.add_argument("--lora-path", default=None, help="Optional safetensors LoRA adapter directory or file.")
     parser.add_argument("--adapter-name", default="maskflow", help="Adapter name used when loading LoRA.")
@@ -197,10 +253,11 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
+    args.pipeline = PIPELINE_ALIASES[args.pipeline]
 
     if args.local_denoise_start > args.local_denoise_end:
         raise ValueError(
-            f"mask denoise start must be <= end, got [{args.mask_denoise_start}, {args.mask_denoise_end}]."
+            f"local denoise start must be <= end, got [{args.local_denoise_start}, {args.local_denoise_end}]."
         )
     if args.poisson_start > args.poisson_end:
         raise ValueError(f"poisson start must be <= end, got [{args.poisson_start}, {args.poisson_end}].")
@@ -210,30 +267,7 @@ def main():
     generator = torch.Generator(device).manual_seed(args.seed)
 
     scheduler = build_scheduler(args)
-    pipe = QwenImageMaskFlow(
-        pretrained_model=args.pretrained_model,
-        scheduler=scheduler,
-        generator=generator,
-        device=device,
-        dtype=args.dtype,
-        mask_dilation_kernel=args.mask_dilation_kernel,
-        mask_blur_kernel=args.mask_blur_kernel,
-        mask_blur_sigma=args.mask_blur_sigma,
-        mask_edge_width=args.mask_edge_width,
-        enable_vae_mask_encoding=args.enable_vae_mask_encoding,
-        enable_masked_loss=args.enable_masked_loss,
-        enable_pixel_blend=args.enable_pixel_blend,
-        local_denoise_steps=[args.local_denoise_start, args.local_denoise_end],
-        enable_local_denoise_train=False,
-        enable_local_denoise_infer=args.enable_local_denoise_infer,
-        enable_poisson_train=False,
-        enable_poisson_infer=args.enable_poisson_infer,
-        poisson_steps=[args.poisson_start, args.poisson_end],
-        poisson_lambda_e=args.poisson_lambda_e,
-        poisson_lambda_s=args.poisson_lambda_s,
-        poisson_num_iter=args.poisson_num_iter,
-        poisson_momentum=args.poisson_momentum,
-    )
+    pipe = build_pipeline(args, scheduler, generator, device)
     pipe.transformer.requires_grad_(False)
     pipe.transformer.eval()
     pipe.vae.eval()
@@ -243,11 +277,16 @@ def main():
     pipe.transformer.requires_grad_(False)
 
     batch = build_batch(args)
-    logger.info(
-        f"Run inference on {args.source} with {args.num_inference_steps} steps, "
-        f"cfg_scale={args.cfg_scale}, unmask_with={args.unmask_with}, "
-        f"pixel_blend={args.enable_pixel_blend}, poisson_infer={args.enable_poisson_infer}."
+    log_msg = (
+        f"Run {args.pipeline} inference on {args.source} with {args.num_inference_steps} steps, "
+        f"cfg_scale={args.cfg_scale}"
     )
+    if args.pipeline == "qwenimage_mask_flow":
+        log_msg += (
+            f", unmask_with={args.unmask_with}, pixel_blend={args.enable_pixel_blend}, "
+            f"poisson_infer={args.enable_poisson_infer}"
+        )
+    logger.info(log_msg + ".")
 
     with torch.inference_mode():
         outputs = pipe.eval_step(

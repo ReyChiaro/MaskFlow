@@ -17,14 +17,18 @@ data_cache/
 wandb/
 outputs/
 
+# Rubbish
+.DS_Store
+
 # Others
 .env
 tools/
 pretrained_weights/
 ablation_experiments/
 scripts/inference/
-scripts/utils/*
-!scripts/utils/split_eval_data.py
+scripts/utils/
+scripts/ablation/
+scripts/evaluation/
 dataset/
 deprecated/
 multi_threads_logs/
@@ -44,6 +48,4 @@ _[!_]*.py
 *.pt
 *.distcp
 *.tar
-
-toy_poisson_probability_field.py
 figs/
