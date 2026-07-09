@@ -217,6 +217,8 @@ def evaluate(cfgs: OmegaConf):
 
     batch_start = 0
     for step, batch in tqdm(enumerate(dataloader), desc="Eval", total=len(dataloader)):
+        if cfgs.eval_with_position_prompt:
+            batch["prompt"] = [p for p in batch["edit_instruction"]]
         output: dict[str, torch.Tensor] = pipe.eval_step(
             batch,
             num_inference_steps=num_inference_steps,

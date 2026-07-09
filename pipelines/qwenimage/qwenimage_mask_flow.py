@@ -13,6 +13,7 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
 
 from tqdm import tqdm
 from typing import Any, Optional
+from torchvision.utils import save_image
 from loguru import logger
 
 from schedulers import MaskFlowScheduler
@@ -591,7 +592,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
                     pred = (pred_norm / cfg_norm) * cfg_pred
 
-                if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() < self.poisson_steps[1]:
+                if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() <= self.poisson_steps[1]:
                     # Predict clean endpoint
                     x0_pred = self.scheduler.predict_x0(xt, curr_sigma, d_sigma_dt, pred, source, mask_latents, noise)
                     x0_dtype = x0_pred.dtype
@@ -603,7 +604,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     x0_refined = QwenImageEditPlusPipeline._pack_latents(
                         x0_refined, x0_refined.shape[0], x0_refined.shape[1], x0_refined.shape[-2], x0_refined.shape[-1]
                     ).to(dtype=x0_dtype)
-                    # pred = (xt - x0_refined) / curr_sigma.clamp_min(1e-4)
                     pred = (xt - x0_refined) * d_sigma_dt / curr_sigma.clamp_min(1e-4)
 
                 if self.enable_local_denoise_infer:
