@@ -209,10 +209,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-debug", action="store_true", help="Also save mask/edge/output tensors next to output.")
 
     # Mask image edit args
-    parser.add_argument("--mask-dilation-kernel", type=int, default=25)
-    parser.add_argument("--mask-blur-kernel", type=int, default=25)
-    parser.add_argument("--mask-blur-sigma", type=float, default=25.0)
-    parser.add_argument("--mask-edge-width", type=int, default=50)
+    parser.add_argument("--mask-dilation-kernel", type=int, default=75)
+    parser.add_argument("--mask-blur-kernel", type=int, default=125)
+    parser.add_argument("--mask-blur-sigma", type=float, default=25)
+    parser.add_argument("--mask-edge-width", type=int, default=25)
     parser.add_argument("--enable-vae-mask-encoding", type=str2bool, default=True)
     parser.add_argument("--enable-masked-loss", type=str2bool, default=True)
     parser.add_argument("--enable-pixel-blend", type=str2bool, default=False)

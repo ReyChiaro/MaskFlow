@@ -1,8 +1,5 @@
-import copy
 import torch
-import random
 import torch.nn.functional as F
-import torchvision.transforms.functional as T
 
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
     QwenImageEditPlusPipeline,
@@ -13,20 +10,12 @@ from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKL
 from diffusers.models.transformers.transformer_qwenimage import QwenImageTransformer2DModel
 
 from dataclasses import dataclass, field
-from PIL import Image
 from tqdm import tqdm
-from typing import Any, Literal, Iterable, Optional
+from typing import Any, Literal, Optional
 
 from schedulers import RectifiedFlowMatchingScheduler
 from pipelines.base_pipeline import BasePipeline, PreprocessOutput, ForwardOutput
-from data_module.utils import (
-    reshape_to_divisible_max_resolution,
-    crop_image_to_aspect_ratio,
-    ASPECT_RATIOS,
-    MAX_RESOLUTION,
-    MAX_CONDITION_RESOLUTION,
-    DIVISIBLE_BY,
-)
+from data_module.utils import MAX_RESOLUTION
 
 
 @dataclass
@@ -224,7 +213,7 @@ class QwenImageEditPlus(BasePipeline):
             conditions=cond_latents,
             ground_truth=gt,
             noise=noise,
-            timesteps=ts,
+            timesteps=sigmas,
             sigmas=sigmas,
             height=height,
             width=width,

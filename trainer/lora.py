@@ -84,6 +84,19 @@ class LoraTrainer(BaseTrainer):
         save_file(lora_state_dict, save_path, metadata=metadata)
         logger.info(f"LoRA safetensors saved to {save_path}.")
 
+    def preprocess_train_batch(self, batch, step: int, cfg_dropout: float | None = None):
+        if cfg_dropout is not None:
+            if "edit_instruction" in batch:
+                batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in batch["edit_instruction"]]
+            else:
+                batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in batch["prompt"]]
+        return batch
+
+    def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
+        if "edit_instruction" in batch:
+            batch["prompt"] = [p for p in batch["edit_instruction"]]
+        return batch
+
     def on_train_end(self, global_step: int):
         if global_step <= 0:
             logger.warning("Skip LoRA safetensors export because no training step was completed.")

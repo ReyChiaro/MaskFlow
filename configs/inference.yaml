@@ -5,7 +5,8 @@ defaults:
 
 
 timestamp: ${now:%Y%m%d-%H%M%S}
-
+resume_from: ""
+safetensors_dir: ""
 
 hydra:
   run:
