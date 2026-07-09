@@ -346,7 +346,7 @@ class QwenImageEditPlus(BasePipeline):
         xt = model_inputs.noise
         # with self.scheduler.inference_sampler(xt, num_inference_steps, xt.shape[1]) as sampler:
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
-            for t, curr_sigma, next_sigma in tqdm(inferencer, total=num_inference_steps):
+            for t, curr_sigma, next_sigma, d_sigma_dt in tqdm(inferencer, total=num_inference_steps):
                 hidden_states = torch.cat([xt] + [c for c in model_inputs.conditions], dim=1)
                 timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
 
@@ -374,7 +374,7 @@ class QwenImageEditPlus(BasePipeline):
                     cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
                     pred = (pred_norm / cfg_norm) * cfg_pred
 
-                xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma)
+                xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, d_sigma_dt)
 
         output = QwenImageEditPlusPipeline._unpack_latents(
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
