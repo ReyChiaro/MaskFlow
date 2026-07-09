@@ -34,6 +34,7 @@ run_foreground() {
     local gpu="$1"
     echo "Running foreground metrics on GPU ${gpu}"
     CUDA_VISIBLE_DEVICES="${gpu}" python calculate_metrics.py \
+        --stage "foreground" \
         --source "evaluations/maskflow_ablations/${EXPERIMENTS}/rank_*/evaluations/output" \
         --target "evaluations/target" \
         --mask "evaluations/maskflow_ablations/${EXPERIMENTS}/rank_*/evaluations/mask" \
@@ -45,6 +46,7 @@ run_background() {
     local gpu="$1"
     echo "Running background metrics on GPU ${gpu}"
     CUDA_VISIBLE_DEVICES="${gpu}" python calculate_metrics.py \
+        --stage "background" \
         --source "evaluations/maskflow_ablations/${EXPERIMENTS}/rank_*/evaluations/output" \
         --target "evaluations/source" \
         --mask "evaluations/maskflow_ablations/${EXPERIMENTS}/rank_*/evaluations/mask" \

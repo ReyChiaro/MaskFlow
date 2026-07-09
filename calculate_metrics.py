@@ -47,10 +47,50 @@ if __name__ == "__main__":
     parser.add_argument("--mask", type=str, default=None, help="Path to Dir or Image for foreground masks.")
     parser.add_argument("--rank", type=int, default=0)
     parser.add_argument("--save-to", type=str, help="JSON file for outputs.")
+    parser.add_argument("--stage", type=str, choices=["foreground", "background"], default="foreground")
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.rank}") if args.rank >= 0 else torch.device("cpu")
-    evaluator = Evaluator(device=device)
+
+    foreground_metrics = [
+        "FID",
+        "CLIP",
+        "CLIP-FG",
+        "DINO",
+        "DINO-FG",
+        "LPIPS",
+        "LPIPS-FG",
+        "MSE",
+        "MSE-FG",
+        "PSNR",
+        "PSNR-FG",
+        "SSIM",
+        "SSIM-FG",
+        "VGG-CONTENT",
+        "VGG-CONTENT-FG",
+    ]
+    background_metrics = [
+        "FID",
+        "CLIP",
+        "CLIP-BG",
+        "DINO",
+        "DINO-BG",
+        "LPIPS",
+        "LPIPS-BG",
+        "MSE",
+        "MSE-BG",
+        "PSNR",
+        "PSNR-BG",
+        "SSIM",
+        "SSIM-BG",
+        "VGG-CONTENT",
+        "VGG-CONTENT-BG",
+    ]
+
+    evaluator = Evaluator(
+        metrics=foreground_metrics if args.stage == "foreground" else background_metrics,
+        device=device,
+    )
 
     metric_content = "\n" + " Metrics ".center(70, "=")
     for k, fn in evaluator.metrics.items():

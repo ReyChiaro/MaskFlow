@@ -6,14 +6,15 @@ set -euo pipefail
 # the next experiment starts so GPU memory can be released.
 
 EXPERIMENTS=(
-    "mf-baseline"
-    "mf-mask_inp-0.1-1.0"
-    "mf-mask_inp-0.0-0.9"
-    "mf-mask_inp-0.1-0.9"
-    "mf_ps-constant_p0.2"
-    "mf_ps-constant_p0.5"
-    "mf_ps-linear1.0-0.5"
-    "mf_ps-linear1.0-0.0"
+    # "mf-baseline"
+    # "mf-mask_inp-0.1-1.0"
+    # "mf-mask_inp-0.0-0.9"
+    # "mf-mask_inp-0.1-0.9"
+    # "mf_ps-constant_p0.2"
+    # "mf_ps-constant_p0.5"
+    # "mf_ps-linear1.0-0.5"
+    # "mf_ps-linear1.0-0.0"
+
 )
 
 export HYDRA_FULL_ERROR="${HYDRA_FULL_ERROR:-1}"
@@ -23,7 +24,7 @@ GPUS_CSV="${GPUS:-1,2}"
 IFS="," read -r -a GPUS <<< "$GPUS_CSV"
 NUM_GPUS=${#GPUS[@]}
 
-ABLATIONS_ROOT="${ABLATIONS_ROOT:-ablations}"
+ABLATIONS_ROOT="${ABLATIONS_ROOT:-ablation_experiments}"
 IMAGE_ROOT="${IMAGE_ROOT:-dataset/MaskEdit/scene}"
 DATA_FILE="${DATA_FILE:-${IMAGE_ROOT}/test.jsonl}"
 
@@ -35,7 +36,7 @@ BATCH_SIZE_PER_PROCESS="${BATCH_SIZE_PER_PROCESS:-1}"
 DATA_LOADER_WORKERS="${DATA_LOADER_WORKERS:-0}"
 
 RUN_TIMESTAMP="${RUN_TIMESTAMP:-$(date +%Y%m%d-%H%M%S)}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/evaluation/maskflow_ablations}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-evaluations/maskflow_ablations}"
 PROJECT_NAME_PREFIX="${PROJECT_NAME_PREFIX:-eval_}"
 
 USER_ARGS=("$@")

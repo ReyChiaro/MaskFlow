@@ -9,11 +9,11 @@ torchrun \
     --nnodes=1 \
     --nproc-per-node=1 \
     --master-addr 127.0.0.1 \
-    --master-port 29676 \
+    --master-port 29696 \
     finetune.py \
     --config-path=configs \
     --config-name=train \
-    project.project_name="maskflow-linear_decay_0.8_0.2" \
+    project.project_name="maskflow-linear_decay_1.0_0.0" \
     trainset=mask_edit \
     evalset=mask_edit \
     trainset.image_root=$IMAGE_ROOT \
@@ -60,6 +60,6 @@ torchrun \
     trainer.num_inference_steps=50 \
     trainer.fsdp_strategy=no_shard \
     trainer.prompt_sampler_cfgs.name=linear-decay \
-    trainer.prompt_sampler_cfgs.p=0 \
-    trainer.prompt_sampler_cfgs.start_p=0.8 \
-    trainer.prompt_sampler_cfgs.end_p=0.2 \
+    trainer.prompt_sampler_cfgs.p=0.5 \
+    trainer.prompt_sampler_cfgs.start_p=1.0 \
+    trainer.prompt_sampler_cfgs.end_p=0.0 \
