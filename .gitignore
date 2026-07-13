@@ -22,19 +22,14 @@ outputs/
 
 # Others
 .env
-tools/
-pretrained_weights/
-ablation_experiments/
-scripts/inference/
-scripts/utils/
-scripts/ablation/
-scripts/evaluation/
-dataset/
-deprecated/
-multi_threads_logs/
-**ablations/
-evaluations/
-_test*.py
+tools/*
+demo/*
+scripts/*
+dataset/*
+evaluations/*
+figs/*
+experiments/*
+
 *.jsonl
 *.json
 *.jpg
@@ -48,4 +43,3 @@ _[!_]*.py
 *.pt
 *.distcp
 *.tar
-figs/
