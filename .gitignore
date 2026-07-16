@@ -29,7 +29,9 @@ dataset/*
 evaluations/*
 figs/*
 experiments/*
+viewer/*
 
+EVALUATIONS
 *.jsonl
 *.json
 *.jpg
