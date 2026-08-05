@@ -24,8 +24,8 @@ enable_pixel_blend: false
 enable_poisson_train: true
 enable_poisson_infer: true
 poisson_steps: [0.0, 1.0]
-poisson_lambda_e: 0.1
-poisson_lambda_s: 0.1
+poisson_lambda_e: 1
+poisson_lambda_s: 1
 poisson_num_iter: 50
 poisson_momentum: 0.1
 
