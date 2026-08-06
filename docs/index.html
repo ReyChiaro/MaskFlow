@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#7c3aed" />
+    <meta
+      name="description"
+      content="MaskFlow is a training framework for precise, consistent, and seamless regional image editing."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="MaskFlow: Precise, Consistent and Seamless Regional Image Editing" />
+    <meta
+      property="og:description"
+      content="A mask-aware flow-matching framework for precise localization, consistent background preservation, and seamless boundaries."
+    />
+    <title>MaskFlow: Precise, Consistent and Seamless Regional Image Editing</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./site-config.js" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="scroll-progress" aria-hidden="true"><span></span></div>
+
+    <header class="site-header" data-header>
+      <nav class="nav page-width" aria-label="Primary navigation">
+        <a class="wordmark" href="#top">MaskFlow</a>
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="nav-panel">
+          <span></span><span></span>
+          <span class="sr-only">Toggle navigation</span>
+        </button>
+        <div class="nav-panel" id="nav-panel">
+          <a href="#abstract">Abstract</a>
+          <a href="#experiments">Experiments</a>
+          <a href="#citation">Citation</a>
+          <span class="nav-paper" data-primary-resource></span>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <section class="paper-hero" id="top">
+        <div class="paper-width hero-inner">
+          <h1 class="paper-title hero-enter">
+            <span class="title-mark">MaskFlow:</span>
+            Precise, Consistent and Seamless <span class="title-tail">Regional Image Editing</span>
+          </h1>
+          <p class="paper-summary hero-enter">
+            A mask-aware flow-matching framework for regional image editing with precise localization,
+            consistent background preservation, and seamless boundary transitions.
+          </p>
+
+          <div class="author-block hero-enter">
+            <p class="authors" data-authors></p>
+            <p class="affiliations">
+              <span><sup>1</sup> SenseTime Research</span>
+              <span><sup>2</sup> Beihang University</span>
+              <span><sup>3</sup> Nanyang Technological University</span>
+            </p>
+          </div>
+
+          <div class="resource-list hero-enter" data-resources aria-label="Project resources"></div>
+        </div>
+
+        <div class="page-width hero-figure reveal">
+          <figure class="figure-block" data-zoomable>
+            <div class="image-frame">
+              <img
+                src="./assets/figures/teaser.jpg"
+                alt="MaskFlow examples demonstrating precise localization, consistent background preservation, and seamless boundary transitions"
+                width="2500"
+                height="2008"
+                fetchpriority="high"
+              />
+              <button class="zoom-button" type="button" aria-label="Enlarge Figure 1">View full size</button>
+            </div>
+            <figcaption class="figure-caption">
+              <strong>Figure 1.</strong> Regional image editing with MaskFlow. (a) MaskFlow follows the provided
+              mask for precise localization. (b) Unrelated content outside the mask remains unchanged.
+              (c) Soft-Poisson de-seaming produces a smooth transition at the edited boundary.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="academic-section" id="abstract">
+        <div class="page-width section-grid">
+          <header class="section-label reveal">
+            <span>01</span>
+            <p>Overview</p>
+          </header>
+          <div class="section-content reveal">
+            <h2>Abstract</h2>
+            <p class="abstract-text">
+              Regional image editing offers intuitive spatial control, but existing instruction- and
+              mask-guided methods often struggle with precise localization, background preservation, and
+              smooth boundary transitions. We propose <strong>MaskFlow</strong>, a training framework that
+              incorporates the mask into the probability path and flow-matching objective to constrain the
+              editable region while preserving unmasked content. A Soft-Poisson de-seaming module further
+              refines the predicted vector field at each sampling step, improving continuity between the
+              generated foreground and preserved background. Experiments on natural scenes and infographic
+              images demonstrate reliable, high-fidelity edits with improved localization, background
+              consistency, and boundary alignment.
+            </p>
+
+            <div class="contributions">
+              <h3>Contributions</h3>
+              <ol>
+                <li>
+                  <span>1</span>
+                  <p>
+                    A mask-aware flow-matching framework that concentrates generation inside arbitrary edit
+                    regions while preserving the source background.
+                  </p>
+                </li>
+                <li>
+                  <span>2</span>
+                  <p>
+                    Soft-Poisson de-seaming, which refines the vector field throughout sampling instead of
+                    treating boundary artifacts as post-processing.
+                  </p>
+                </li>
+                <li>
+                  <span>3</span>
+                  <p>
+                    MEData, a paired regional editing dataset covering natural scenes and challenging
+                    infographic images.
+                  </p>
+                </li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="academic-section section-tint" id="experiments">
+        <div class="page-width section-grid">
+          <header class="section-label reveal">
+            <span>02</span>
+            <p>Evaluation</p>
+          </header>
+          <div class="section-content">
+            <div class="reveal">
+              <h2>Experiments</h2>
+              <p class="section-intro">
+                We compare MaskFlow with commercial systems, open-source general-purpose editors, and
+                methods designed for regional editing. Evaluation covers semantic alignment, structural
+                consistency, image fidelity, background preservation, and boundary quality.
+              </p>
+            </div>
+
+            <div class="result-list" data-result-list></div>
+
+            <div class="subsection quantitative reveal">
+              <h3>Quantitative comparison</h3>
+              <p>
+                MaskFlow obtains the best CLIP, FID, PSNR, SSIM, and background LPIPS among the evaluated
+                methods. The complete comparison on MEData is reported below.
+              </p>
+              <div class="table-scroll" tabindex="0" aria-label="Quantitative comparison on MEData">
+                <table>
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th colspan="5" class="column-group">Global</th>
+                      <th colspan="2" class="column-group">Background</th>
+                    </tr>
+                    <tr>
+                      <th>Method</th><th>CLIP ↑</th><th>DINO ↑</th><th>FID ↓</th><th>PSNR ↑</th><th>SSIM ↑</th><th>MSE ↓</th><th>LPIPS ↓</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>Gemini 3 Flash Image</td><td>0.9724</td><td>0.9537</td><td>20.38</td><td>22.00</td><td>0.7450</td><td>0.0023</td><td>0.0505</td></tr>
+                    <tr><td>GPT Image 2</td><td>0.9734</td><td>0.9367</td><td>24.12</td><td>16.79</td><td>0.5069</td><td>0.0181</td><td>0.2064</td></tr>
+                    <tr class="group-start"><td>BAGEL-7B-MoT</td><td>0.9464</td><td>0.9055</td><td>27.74</td><td>20.80</td><td>0.7560</td><td>0.0030</td><td>0.0648</td></tr>
+                    <tr><td>FLUX.2-dev</td><td>0.9555</td><td>0.9138</td><td>29.99</td><td>19.48</td><td>0.6644</td><td>0.0063</td><td>0.0781</td></tr>
+                    <tr><td>HiDream-O1-Image</td><td>0.9146</td><td>0.8435</td><td>45.34</td><td>13.17</td><td>0.3613</td><td>0.0450</td><td>0.4313</td></tr>
+                    <tr><td>QwenImage-Edit-2511</td><td>0.9492</td><td>0.9107</td><td>29.85</td><td>19.11</td><td>0.6412</td><td>0.0088</td><td>0.1269</td></tr>
+                    <tr class="group-start"><td>RefineAnything</td><td>0.9621</td><td>0.9057</td><td>26.41</td><td>21.29</td><td>0.7740</td><td>0.0000</td><td>0.0007</td></tr>
+                    <tr><td>RegionE</td><td>0.9672</td><td>0.9313</td><td>25.83</td><td>21.03</td><td>0.7399</td><td>0.0031</td><td>0.0751</td></tr>
+                    <tr><td>SpotEdit</td><td>0.9332</td><td>0.8924</td><td>56.49</td><td>10.89</td><td>0.3001</td><td>0.0844</td><td>0.5083</td></tr>
+                    <tr class="ours group-start"><td>MaskFlow <b>Ours</b></td><td class="best">0.9782</td><td class="second">0.9532</td><td class="best">19.90</td><td class="best">22.60</td><td class="best">0.7846</td><td class="second">0.0000</td><td class="best">0.0000</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="subsection reveal">
+              <h3>Ablation study</h3>
+              <p>
+                The mask-aware framework provides the main improvement in regional control, while
+                Soft-Poisson de-seaming yields consistent additional gains in image fidelity.
+              </p>
+              <div class="table-scroll" tabindex="0" aria-label="Ablation study of MaskFlow modules">
+                <table class="ablation-table">
+                  <thead>
+                    <tr><th>MaskFlow</th><th>Soft-Poisson</th><th>FID ↓</th><th>CLIP ↑</th><th>DINO ↑</th><th>LPIPS ↓</th><th>PSNR ↑</th><th>SSIM ↑</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>-</td><td>-</td><td>29.85</td><td>0.9492</td><td>0.9106</td><td>0.2070</td><td>19.11</td><td>0.6412</td></tr>
+                    <tr><td>Yes</td><td>-</td><td>20.51</td><td>0.9761</td><td>0.9505</td><td>0.1074</td><td>22.38</td><td>0.7828</td></tr>
+                    <tr class="ours"><td>Yes</td><td>Yes</td><td>19.90</td><td>0.9782</td><td>0.9532</td><td>0.1047</td><td>22.60</td><td>0.7846</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="academic-section" id="citation">
+        <div class="page-width section-grid">
+          <header class="section-label reveal">
+            <span>03</span>
+            <p>Reference</p>
+          </header>
+          <div class="section-content reveal">
+            <h2>Citation</h2>
+            <p class="section-intro">Citation information will be added when the paper is publicly available.</p>
+            <div class="citation-card">
+              <div class="citation-top">
+                <span>BibTeX</span>
+                <button type="button" data-copy-citation disabled>Copy</button>
+              </div>
+              <pre><code data-citation>Coming soon.</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="page-width footer-inner">
+        <strong>MaskFlow</strong>
+        <p>Precise, Consistent and Seamless Regional Image Editing</p>
+        <p>© <span data-year></span> MaskFlow authors.</p>
+      </div>
+    </footer>
+
+    <dialog class="lightbox" data-lightbox>
+      <button type="button" class="lightbox-close" data-lightbox-close aria-label="Close image viewer">Close</button>
+      <div class="lightbox-body">
+        <img src="" alt="" data-lightbox-image />
+        <p data-lightbox-caption></p>
+      </div>
+    </dialog>
+
+    <div class="toast" role="status" aria-live="polite" data-toast>Copied to clipboard</div>
+  </body>
+</html>
