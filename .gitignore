@@ -30,3 +30,7 @@ scripts/
 viewer/
 submissions/
 .env
+
+*.tar
+*.tar.gz
+*.safetensors
