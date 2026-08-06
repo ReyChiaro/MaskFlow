@@ -22,14 +22,13 @@ outputs/
 
 # Others
 .env
-ablation_experiments/*
-tools/*
-demo/*
-scripts/*
 dataset/*
+demo/*
 evaluations/*
-figs/*
 experiments/*
+figs/*
+scripts/*
+submissions/*
 viewer/*
 
 EVALUATIONS
