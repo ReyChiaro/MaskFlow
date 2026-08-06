@@ -21,27 +21,12 @@ outputs/
 .DS_Store
 
 # Others
+dataset/
+demo/
+evaluations/
+experiments/
+figs/
+scripts/
+viewer/
+submissions/
 .env
-dataset/*
-demo/*
-evaluations/*
-experiments/*
-figs/*
-scripts/*
-submissions/*
-viewer/*
-
-EVALUATIONS
-*.jsonl
-*.json
-*.jpg
-*.png
-*.log
-_[!_]*.py
-*.tar.gz
-*.zip
-*.safetensors
-*.pth
-*.pt
-*.distcp
-*.tar
