@@ -163,6 +163,22 @@ Boolean options accept `true`/`false`, `1`/`0`, `yes`/`no`, `y`/`n`, or `on`/`of
 
 </details>
 
+
+## Visualization
+
+MaskFlow supports a diverse range of mask-guided image editing tasks. The comparisons below show that, relative to other models, MaskFlow localizes edits more precisely while better preserving the surrounding content. It also produces smoother transitions between edited and preserved regions, resulting in higher visual fidelity.
+
+![teaser](assets/readme/teaser.jpg)
+
+MaskFlow is also well suited to applications such as infographic editing, where the target location can be difficult to specify through language alone. Spatial masks provide direct and intuitive control, making the method practical for real-world editing workflows.
+
+![infographics](assets/readme/infographics.jpg)
+
+
+## Distribution Matching Distillation
+
+To improve efficiency for practical deployment, we apply Distribution Matching Distillation (DMD) and provide an accelerated variant that completes generation in only eight inference steps.
+
 ## Citation
 
 <!-- Citation will be added after the paper is released. -->
