@@ -21,28 +21,12 @@ outputs/
 .DS_Store
 
 # Others
+dataset/
+demo/
+evaluations/
+experiments/
+figs/
+scripts/
+viewer/
+submissions/
 .env
-ablation_experiments/*
-tools/*
-demo/*
-scripts/*
-dataset/*
-evaluations/*
-figs/*
-experiments/*
-viewer/*
-
-EVALUATIONS
-*.jsonl
-*.json
-*.jpg
-*.png
-*.log
-_[!_]*.py
-*.tar.gz
-*.zip
-*.safetensors
-*.pth
-*.pt
-*.distcp
-*.tar
