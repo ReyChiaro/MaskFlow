@@ -1,5 +1,5 @@
 import hydra
-
+from diffusers.pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
 from trainer.base_trainer import BaseTrainer
