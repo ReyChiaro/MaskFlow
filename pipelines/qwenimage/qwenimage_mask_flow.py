@@ -13,7 +13,6 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
 
 from tqdm import tqdm
 from typing import Any, Literal, Optional
-from torchvision.utils import save_image
 from loguru import logger
 
 from schedulers import MaskFlowScheduler
@@ -75,7 +74,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     edge_loss_weight: float = 0.0
 
     enable_vae_mask_encoding: bool = True
-    mask_cfg_null_type: Literal["full_one", "null"] = "full_one"
+    mask_cfg_null_type: Literal["full_one", "null"] = "null"
     enable_mask_cfg_gating: bool = False
 
     enable_masked_loss: bool = True
@@ -331,14 +330,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         edge_latents = self.encode_mask(edge)
 
         if "mask" in dit_conditions:
-            if self.enable_vae_mask_encoding:
-                # This decides whether the input mask is sparse.
-                # If encoded with VAE, then the zero will (large probably) be mapped to a non-zero value.
-                conds.append(self.encode_image(dit_conditions["mask"], sample_mode))
-            elif preprocessed_data.mask_cfg_dropped:
-                conds.append(torch.ones_like(mask_latents))
-            else:
-                conds.append(mask_latents.clone())
+            conds.append(self.encode_image(dit_conditions["mask"], sample_mode))
 
         if self.enable_poisson_train:
             tgt_dtype = tgt.dtype
@@ -474,17 +466,19 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         noise = torch.randn(noise_shape, generator=self.generator, device=self.device, dtype=self.dtype)
 
         # Encode condtions
-        conds = [self.encode_image(dit_conditions["source"], sample_mode)]
+        conds = [
+            self.encode_image(dit_conditions["source"], sample_mode),
+            self.encode_image(dit_conditions["mask"], sample_mode),
+        ]
 
         mask_latents = self.encode_mask(mask)
         edge_latents = self.encode_mask(edge)
 
-        if self.enable_vae_mask_encoding:
-            # This decides whether the input mask is sparse.
-            # If encoded with VAE, then the zero will (large probably) be mapped to a non-zero value.
-            conds.append(self.encode_image(dit_conditions["mask"], sample_mode))
-        else:
-            conds.append(mask_latents.clone())
+        null_conds = None
+        if null_dit_conditions is not None:
+            null_conds = [conds[0]]
+            if "mask" in null_dit_conditions:
+                null_conds.append(self.encode_image(null_dit_conditions["mask"], sample_mode))
 
         null_conds = None
         if null_dit_conditions is not None:
@@ -630,7 +624,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         batch,
         num_inference_steps: int = 50,
         cfg_scale: float = 4.0,
-        mask_cfg_scale: float = 1.0,
+        mask_cfg_scale: float = 4.0,
     ) -> list[torch.Tensor]:
         preprocessed_data = self.preprocess_inputs(batch)
         model_inputs = self.prepare_eval_inputs(preprocessed_data, cfg_scale, mask_cfg_scale)
@@ -650,6 +644,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
             for t, curr_sigma, next_sigma, d_sigma_dt in tqdm(inferencer, total=num_inference_steps):
+                curr_sigma = curr_sigma.to(xt.device)
+                next_sigma = next_sigma.to(xt.device)
+                d_sigma_dt = d_sigma_dt.to(xt.device)
                 hidden_states = torch.cat([xt] + [c for c in model_inputs.conditions], dim=1)
                 timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
 

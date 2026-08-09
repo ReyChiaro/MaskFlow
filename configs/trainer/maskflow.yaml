@@ -8,7 +8,7 @@ eval_data_configs: ${evalset}
 lora_configs: ${adapter}
 lr_scheduler_configs: null
 
-enable_save_optimizer: true
+enable_save_optimizer: false
 
 base_seed: 42
 output_dir: ${project.output_dir}
@@ -18,13 +18,13 @@ log_dir: ${project.log_dir}
 resume_from: ""
 
 cfg_scale: 4.0
-cfg_dropout: 0.1
+cfg_dropout: 0.05
 mask_cfg_scale: 4.0
-mask_cfg_dropout: 0.1
+mask_cfg_dropout: 0.05
 max_grad_norm: 1.0
 max_training_steps: 5000
-save_steps: 100
-eval_steps: 100
+save_steps: 1000
+eval_steps: 2500
 mixed_precision: bf16
 enable_gradient_checkpoint: true
 gradient_accumulation_steps: 1
@@ -44,11 +44,11 @@ prompt_sampler_cfgs:
   name: constant
 
   # constant
-  p: 0.5
+  p: 0.0
 
   # linear-decay | const-linear
   start_p: 1.0
-  end_p: 0.2
+  end_p: 0.0
   total_steps: ${trainer.max_training_steps}
 
   # const-linear

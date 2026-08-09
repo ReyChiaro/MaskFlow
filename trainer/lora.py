@@ -1,19 +1,24 @@
-import dataclasses
+import os
 import json
+import torch
+import dataclasses
+import torch.nn.functional as F
 
+from pathlib import Path
+from omegaconf import OmegaConf
 from loguru import logger
+from safetensors.torch import save_file
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
-from omegaconf import OmegaConf
-from pathlib import Path
-from safetensors.torch import save_file
-from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 
 from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
 
+from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+from torchvision.utils import save_image
+
 from trainer.base_trainer import BaseTrainer
-from trainer.prompt_sampler.prompt_sampler import PromptSampler
 from trainer.parallel.utils import wait_for_everyone
+from trainer.prompt_sampler.prompt_sampler import PromptSampler
 
 
 @dataclasses.dataclass
@@ -113,6 +118,9 @@ class MaskFlowTrainer(LoraTrainer):
 
     prompt_sampler_cfgs: OmegaConf = None
 
+    mask_cfg_dropout: float = 0.1
+    mask_cfg_scale: float = 4.0
+
     def __post_init__(self):
         super().__post_init__()
         if self.cfg_dropout + self.mask_cfg_dropout > 1.0:
@@ -139,3 +147,70 @@ class MaskFlowTrainer(LoraTrainer):
 
     def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
         return batch
+
+    @torch.inference_mode()
+    def evaluate(self, global_step: int):
+        if self.eval_loader is None:
+            return
+        if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
+            return
+
+        save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
+        if self.is_main_process:
+            os.makedirs(save_dir, exist_ok=True)
+            logger.info(f"Evaluate start, save to {save_dir}.")
+        wait_for_everyone()
+
+        for step, batch in enumerate(self.eval_loader):
+            batch = self.preprocess_eval_batch(batch, global_step)
+            output: dict[str, torch.Tensor] = self.pipe.eval_step(
+                batch, self.num_inference_steps, self.cfg_scale, self.mask_cfg_scale
+            )
+
+            # -------- Try to save the evaluation results -------- #
+            prompt: list[str] = batch.get("prompt", [""])
+            neg_prompt: list[str] = batch.get("negative_prompt", [""])
+            conditions: dict[str, torch.Tensor] | None = batch.get("conditions", None)
+            target: torch.Tensor | None = batch.get("target", None)
+            image_name = batch.get("image_name", None)
+
+            for batch_idx in range(len(prompt)):
+                tensors = []
+
+                if conditions is not None:
+                    tensors.extend([conditions[k][batch_idx] for k in conditions])
+
+                if target is not None:
+                    tensors.append(target[batch_idx])
+
+                tensors.extend([output[k][batch_idx] for k in output])
+                p = prompt[batch_idx]
+                np = neg_prompt[batch_idx]
+
+                save_name = f"batch_{batch_idx}"
+                if image_name is not None:
+                    save_name = image_name[batch_idx]
+
+                max_h = max([t.shape[-2] for t in tensors])
+                tensors = [
+                    F.pad(
+                        input=t,
+                        pad=(0, 0, 0, max_h - t.shape[1]),
+                        mode="constant",
+                        value=0,
+                    ).to(self.device, dtype=self._eval_dtype)
+                    for t in tensors
+                ]
+                tensors = torch.cat(tensors, dim=-1)
+
+                save_path = os.path.join(save_dir, f"{save_name}.jpg")
+                save_image(tensors, save_path)
+
+                with open(os.path.join(save_dir, "prompt.jsonl"), "a") as f:
+                    f.write(json.dumps({"prompt": p, "negative_prompt": np}) + "\n")
+
+                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {save_name}")
+
+        if self.is_main_process:
+            logger.info(f"Evaluation finished, saved to {save_dir}.")
+        wait_for_everyone()
