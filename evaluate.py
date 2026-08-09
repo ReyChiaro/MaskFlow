@@ -214,15 +214,17 @@ def evaluate(cfgs: OmegaConf):
 
     num_inference_steps = int(_select(cfgs, "num_inference_steps", 50))
     cfg_scale = float(_select(cfgs, "cfg_scale", 1.0))
+    mask_cfg_scale = float(_select(cfgs, "mask_cfg_scale", 1.0))
 
     batch_start = 0
     for step, batch in tqdm(enumerate(dataloader), desc="Eval", total=len(dataloader)):
         if cfgs.eval_with_position_prompt:
             batch["prompt"] = [p for p in batch["edit_instruction"]]
+        eval_kwargs = {}
+        if mask_cfg_scale != 1.0:
+            eval_kwargs["mask_cfg_scale"] = mask_cfg_scale
         output: dict[str, torch.Tensor] = pipe.eval_step(
-            batch,
-            num_inference_steps=num_inference_steps,
-            cfg_scale=cfg_scale,
+            batch, num_inference_steps=num_inference_steps, cfg_scale=cfg_scale, **eval_kwargs
         )
         outputs = _normalize_outputs(output)
         if not outputs:

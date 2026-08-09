@@ -537,12 +537,12 @@ class BaseTrainer:
         wait_for_everyone()
 
         for step, batch in enumerate(self.eval_loader):
-            batch = self.preprocess_eval_batch(batch, global_step, self.cfg_dropout)
+            batch = self.preprocess_eval_batch(batch, global_step)
             output: dict[str, torch.Tensor] = self.pipe.eval_step(batch, self.num_inference_steps, self.cfg_scale)
 
             # -------- Try to save the evaluation results -------- #
-            prompt: list[str] = batch.get("prompt", "")
-            neg_prompt: list[str] = batch.get("negative_prompt", "")
+            prompt: list[str] = batch.get("prompt", [""])
+            neg_prompt: list[str] = batch.get("negative_prompt", [""])
             conditions: dict[str, torch.Tensor] | None = batch.get("conditions", None)
             target: torch.Tensor | None = batch.get("target", None)
             image_name = batch.get("image_name", None)
