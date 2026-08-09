@@ -115,6 +115,8 @@ class MaskFlowTrainer(LoraTrainer):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.cfg_dropout + self.mask_cfg_dropout > 1.0:
+            raise ValueError("cfg_dropout + mask_cfg_dropout must be <= 1 for mutually exclusive CFG dropout.")
         self.prompt_sampler = PromptSampler(**self.prompt_sampler_cfgs)
 
     def preprocess_train_batch(self, batch, step: int, cfg_dropout: float | None = None):
@@ -122,10 +124,18 @@ class MaskFlowTrainer(LoraTrainer):
             tuple(zip(batch["edit_instruction"], batch["prompt"])),
             step,
         )
-        batch["prompt"] = runtime_prompt
-        if cfg_dropout is not None:
-            batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in runtime_prompt]
+        cfg_dropout = cfg_dropout or 0.0
+        dropout_sample = self.rng.random()
+        if dropout_sample < cfg_dropout:
+            batch["prompt"] = ["" for _ in runtime_prompt]
+            batch["mask_cfg_dropped"] = False
+        elif dropout_sample < cfg_dropout + self.mask_cfg_dropout:
+            batch["prompt"] = ["" for _ in runtime_prompt]
+            batch["mask_cfg_dropped"] = True
+        else:
+            batch["prompt"] = runtime_prompt
+            batch["mask_cfg_dropped"] = False
         return batch
 
     def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
-        return super().preprocess_eval_batch(batch, step, cfg_dropout)
+        return batch

@@ -12,7 +12,8 @@ lora_configs: ${adapter}
 base_seed: 42
 resume_from: null
 
-cfg_scale: 1.0
+cfg_scale: 4.0
+mask_cfg_scale: 4.0
 num_inference_steps: 50
 
 eval_with_position_prompt: false

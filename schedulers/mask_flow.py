@@ -110,6 +110,8 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         mask: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
     ):
+        while sigma.ndim < xt.ndim:
+            sigma = sigma.unsqueeze(-1)
         # if source is None or mask is None or noise is None:
         #     # return xt - sigma * v
         #     return xt - (sigma / d_sigma_dt) * v

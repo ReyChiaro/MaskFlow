@@ -67,6 +67,7 @@ class BaseTrainer:
 
     # Strategy
     cfg_dropout: float = 0.0
+    mask_cfg_dropout: float = 0.0
     max_grad_norm: float = 1.0
     max_training_steps: int = 100
     save_steps: int = 10
@@ -89,6 +90,7 @@ class BaseTrainer:
     # Inference
     num_inference_steps: int = 50
     cfg_scale: float = 1.0
+    mask_cfg_scale: float = 1.0
 
     def __post_init__(self):
         r"""
@@ -538,7 +540,12 @@ class BaseTrainer:
 
         for step, batch in enumerate(self.eval_loader):
             batch = self.preprocess_eval_batch(batch, global_step, self.cfg_dropout)
-            output: dict[str, torch.Tensor] = self.pipe.eval_step(batch, self.num_inference_steps, self.cfg_scale)
+            eval_kwargs = {}
+            if self.mask_cfg_scale != 1.0:
+                eval_kwargs["mask_cfg_scale"] = self.mask_cfg_scale
+            output: dict[str, torch.Tensor] = self.pipe.eval_step(
+                batch, self.num_inference_steps, self.cfg_scale, **eval_kwargs
+            )
 
             # -------- Try to save the evaluation results -------- #
             prompt: list[str] = batch.get("prompt", "")
