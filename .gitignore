@@ -29,6 +29,7 @@ figs/
 scripts/
 viewer/
 submissions/
+maskflow_*/
 .env
 
 *.log
