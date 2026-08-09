@@ -480,15 +480,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             if "mask" in null_dit_conditions:
                 null_conds.append(self.encode_image(null_dit_conditions["mask"], sample_mode))
 
-        null_conds = None
-        if null_dit_conditions is not None:
-            null_conds = [conds[0]]
-            if "mask" in null_dit_conditions:
-                if self.enable_vae_mask_encoding:
-                    null_conds.append(self.encode_image(null_dit_conditions["mask"], sample_mode))
-                else:
-                    null_conds.append(torch.ones_like(mask_latents))
-
         image_shapes.append((1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size))
         image_shapes.extend([(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in conds])
         image_shapes = [image_shapes] * noise.shape[0]
