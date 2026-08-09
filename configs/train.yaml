@@ -6,7 +6,7 @@ defaults:
   - project: train
   - adapter: lora
   - lr_scheduler: null
-  - trainer: lora
+  - trainer: maskflow
   - _self_
 
 
