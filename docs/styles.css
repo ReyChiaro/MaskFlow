@@ -1,48 +1,3 @@
-@font-face {
-  font-family: "LXGW WenKai";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./assets/fonts/lxgwwenkai-bold-104.woff2") format("woff2");
-  unicode-range: U+2193;
-}
-
-@font-face {
-  font-family: "LXGW WenKai";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./assets/fonts/lxgwwenkai-bold-106.woff2") format("woff2");
-  unicode-range: U+2191;
-}
-
-@font-face {
-  font-family: "LXGW WenKai";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./assets/fonts/lxgwwenkai-bold-117.woff2") format("woff2");
-  unicode-range: U+004E;
-}
-
-@font-face {
-  font-family: "LXGW WenKai";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./assets/fonts/lxgwwenkai-bold-118.woff2") format("woff2");
-  unicode-range: U+00A9;
-}
-
-@font-face {
-  font-family: "LXGW WenKai";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./assets/fonts/lxgwwenkai-bold-119.woff2") format("woff2");
-  unicode-range: U+0020-0022, U+0027-002A, U+002C-003B, U+003F, U+0041-004D, U+004F-005D, U+0061-007B, U+007D, U+00AB, U+00AE, U+00B2, U+00B7, U+00BB, U+00DF-00E5, U+00E7-00EA, U+00EC-00ED, U+00F1-00F4, U+00F6, U+00F9-00FA, U+00FC, U+0101, U+0103, U+0113, U+012B, U+0148, U+014D, U+016B, U+01CE, U+01D0, U+0300-0301, U+2013-2014, U+2039-203A, U+2122;
-}
-
 :root {
   --ink: #17131b;
   --muted: #423a47;
@@ -57,7 +12,7 @@
   --reading-size: 18px;
   --page: min(1120px, calc(100vw - 48px));
   --paper-width: min(980px, calc(100vw - 48px));
-  --font: "LXGW WenKai", cursive;
+  --font: "Times New Roman", Times, serif;
   --serif: var(--font);
   --sans: var(--font);
 }
@@ -191,11 +146,13 @@ img {
 
 .academic-section { padding: 56px 0; border-top: 1px solid var(--soft-line); }
 .section-tint { background: var(--tint); }
-.section-grid { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 42px; }
-.section-label { padding-top: 9px; }
+.section-grid { position: relative; }
+.section-label {
+  position: absolute; top: 9px; left: 0; width: 70px; padding-right: 22px; text-align: right;
+}
 .section-label span { color: var(--pink); font: 700 11px/1 var(--sans); letter-spacing: .08em; }
-.section-label p { margin: 8px 0 0; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
-.section-content { min-width: 0; }
+.section-label p { display: none; margin: 8px 0 0; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.section-content { width: var(--paper-width); min-width: 0; margin-inline: auto; }
 .section-content > h2,
 .section-content > .reveal > h2 {
   margin: 0; font-family: var(--serif); font-size: clamp(25px, 2.6vw, 30px);
@@ -300,12 +257,17 @@ tr.ours b { margin-left: 5px; color: var(--pink); font-size: 8px; text-transform
 .reveal.visible { opacity: 1; transform: none; }
 @keyframes enter { to { opacity: 1; transform: none; } }
 
+@media (max-width: 1167px) {
+  .section-label {
+    position: static; width: var(--paper-width); display: flex; align-items: center;
+    gap: 12px; margin: 0 auto 20px; padding: 0; text-align: left;
+  }
+  .section-label p { display: block; margin: 0; }
+}
+
 @media (max-width: 900px) {
-  :root { --page: min(100% - 36px, 780px); --paper-width: min(100% - 36px, 780px); }
+  :root { --page: min(calc(100vw - 36px), 780px); --paper-width: min(calc(100vw - 36px), 780px); }
   .academic-section { padding: 50px 0; }
-  .section-grid { grid-template-columns: 1fr; gap: 22px; }
-  .section-label { display: flex; align-items: center; gap: 12px; padding: 0; }
-  .section-label p { margin: 0; }
   .method-points { grid-template-columns: 1fr; }
   .method-points article, .method-points article:first-child, .method-points article:last-child { padding: 20px 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .method-points article:last-child { border-bottom: 0; }
@@ -313,7 +275,7 @@ tr.ours b { margin-left: 5px; color: var(--pink); font-size: 8px; text-transform
 }
 
 @media (max-width: 720px) {
-  :root { --page: calc(100% - 28px); --paper-width: calc(100% - 28px); }
+  :root { --page: calc(100vw - 28px); --paper-width: calc(100vw - 28px); }
   html { scroll-padding-top: 68px; }
   .site-header, .nav { min-height: 58px; }
   .menu-toggle { display: block; }

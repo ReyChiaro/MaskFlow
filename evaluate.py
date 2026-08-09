@@ -221,10 +221,13 @@ def evaluate(cfgs: OmegaConf):
         if cfgs.eval_with_position_prompt:
             batch["prompt"] = [p for p in batch["edit_instruction"]]
         eval_kwargs = {}
-        if mask_cfg_scale != 1.0:
+        if hasattr(pipe, "mask_cfg_null_type"):
             eval_kwargs["mask_cfg_scale"] = mask_cfg_scale
         output: dict[str, torch.Tensor] = pipe.eval_step(
-            batch, num_inference_steps=num_inference_steps, cfg_scale=cfg_scale, **eval_kwargs
+            batch,
+            num_inference_steps=num_inference_steps,
+            cfg_scale=cfg_scale,
+            **eval_kwargs,
         )
         outputs = _normalize_outputs(output)
         if not outputs:

@@ -296,7 +296,7 @@ def main():
 
     with torch.inference_mode():
         eval_kwargs = {}
-        if args.pipeline == "qwenimage_mask_flow" and args.mask_cfg_scale != 1.0:
+        if args.pipeline == "qwenimage_mask_flow":
             eval_kwargs["mask_cfg_scale"] = args.mask_cfg_scale
         outputs = pipe.eval_step(
             batch, num_inference_steps=args.num_inference_steps, cfg_scale=args.cfg_scale, **eval_kwargs
