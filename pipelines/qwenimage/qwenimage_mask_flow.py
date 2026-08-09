@@ -12,8 +12,7 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
 )
 
 from tqdm import tqdm
-from typing import Any, Optional
-from torchvision.utils import save_image
+from typing import Any, Literal, Optional
 from loguru import logger
 
 from schedulers import MaskFlowScheduler
@@ -28,6 +27,7 @@ class QwenMaskFlowPreprocessOutput(PreprocessOutput):
     raw_source: torch.Tensor | None = None
     mask: torch.Tensor | None = None
     edge: torch.Tensor | None = None
+    mask_cfg_dropped: bool = False
 
 
 @dataclasses.dataclass
@@ -40,6 +40,11 @@ class QwenMaskFlowForwardOutput(QwenForwardOutput):
     edge_latents: torch.Tensor | None = None
 
     mask_ratio: torch.Tensor | None = None
+
+    mask_null_prompt_embeds: torch.Tensor | None = None
+    mask_null_prompt_embeds_mask: torch.Tensor | None = None
+    mask_null_conditions: list[torch.Tensor] | None = None
+    mask_null_image_shapes: list | None = None
 
 
 @dataclasses.dataclass
@@ -69,6 +74,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     edge_loss_weight: float = 0.0
 
     enable_vae_mask_encoding: bool = True
+    mask_cfg_null_type: Literal["full_one", "null"] = "null"
+    enable_mask_cfg_gating: bool = False
 
     enable_masked_loss: bool = True
 
@@ -120,6 +127,26 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         mask = F.interpolate(mask, [h // self.vae_scale_factor, w // self.vae_scale_factor], mode="nearest")
         mask = mask.mean(dim=1, keepdim=True).repeat(1, self.vae_channels, 1, 1).unsqueeze(2)
         return mask.clamp(0, 1)
+
+    def prepare_null_mask_conditions(
+        self,
+        vlm_conditions: dict[str, torch.Tensor],
+        dit_conditions: dict[str, torch.Tensor],
+    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        if self.mask_cfg_null_type == "full_one":
+            return (
+                {
+                    "source": vlm_conditions["source"],
+                    "mask": torch.ones_like(vlm_conditions["mask"]),
+                },
+                {
+                    "source": dit_conditions["source"],
+                    "mask": torch.ones_like(dit_conditions["mask"]),
+                },
+            )
+        if self.mask_cfg_null_type == "null":
+            return {"source": vlm_conditions["source"]}, {"source": dit_conditions["source"]}
+        raise ValueError(f"Unsupported mask_cfg_null_type: {self.mask_cfg_null_type}.")
 
     # ---------------- Poisson Operations ---------------- #
     def neighbor_sum(self, x: torch.Tensor) -> torch.Tensor:
@@ -260,6 +287,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             raw_source=raw_source,
             mask=mask,
             edge=edge,
+            mask_cfg_dropped=bool(batch.get("mask_cfg_dropped", False)),
         )
 
     def prepare_forward_inputs(self, preprocessed_data: QwenMaskFlowPreprocessOutput) -> QwenMaskFlowForwardOutput:
@@ -275,12 +303,14 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             )
             return super().prepare_forward_inputs(preprocessed_data)
 
-        # Conduct CFG dropout
         prompt = preprocessed_data.prompt
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
+        vlm_conditions = preprocessed_data.vlm_conditions
+        dit_conditions = preprocessed_data.dit_conditions
+        if preprocessed_data.mask_cfg_dropped:
+            vlm_conditions, dit_conditions = self.prepare_null_mask_conditions(vlm_conditions, dit_conditions)
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, vlm_conditions)
 
         image_shapes = []
-        dit_conditions = preprocessed_data.dit_conditions
         target = preprocessed_data.target
         mask = preprocessed_data.mask
         edge = preprocessed_data.edge
@@ -299,12 +329,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         mask_latents = self.encode_mask(mask)
         edge_latents = self.encode_mask(edge)
 
-        if self.enable_vae_mask_encoding:
-            # This decides whether the input mask is sparse.
-            # If encoded with VAE, then the zero will (large probably) be mapped to a non-zero value.
+        if "mask" in dit_conditions:
             conds.append(self.encode_image(dit_conditions["mask"], sample_mode))
-        else:
-            conds.append(mask_latents.clone())
 
         if self.enable_poisson_train:
             tgt_dtype = tgt.dtype
@@ -381,7 +407,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         )
 
     def prepare_eval_inputs(
-        self, preprocessed_data: QwenMaskFlowPreprocessOutput, cfg_scale: float = 1.0
+        self,
+        preprocessed_data: QwenMaskFlowPreprocessOutput,
+        cfg_scale: float = 1.0,
+        mask_cfg_scale: float = 1.0,
     ) -> QwenMaskFlowForwardOutput:
         r"""
         Prepare training evaluation inputs.
@@ -398,11 +427,24 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         prompt = preprocessed_data.prompt
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
 
+        text_cfg_enabled = cfg_scale != 1.0
+        mask_cfg_enabled = mask_cfg_scale != 1.0
         neg_prompt_embeds, neg_prompt_embeds_mask = None, None
-        if cfg_scale > 1.0:
+        mask_null_prompt_embeds, mask_null_prompt_embeds_mask = None, None
+        null_dit_conditions = None
+        if text_cfg_enabled or mask_cfg_enabled:
             negative_prompt = preprocessed_data.negative_prompt
             neg_prompt_embeds, neg_prompt_embeds_mask = self.encode_prompt(
                 negative_prompt, preprocessed_data.vlm_conditions
+            )
+
+        if mask_cfg_enabled:
+            null_vlm_conditions, null_dit_conditions = self.prepare_null_mask_conditions(
+                preprocessed_data.vlm_conditions,
+                preprocessed_data.dit_conditions,
+            )
+            mask_null_prompt_embeds, mask_null_prompt_embeds_mask = self.encode_prompt(
+                negative_prompt, null_vlm_conditions
             )
 
         image_shapes = []
@@ -424,21 +466,33 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         noise = torch.randn(noise_shape, generator=self.generator, device=self.device, dtype=self.dtype)
 
         # Encode condtions
-        conds = [self.encode_image(dit_conditions["source"], sample_mode)]
+        conds = [
+            self.encode_image(dit_conditions["source"], sample_mode),
+            self.encode_image(dit_conditions["mask"], sample_mode),
+        ]
 
         mask_latents = self.encode_mask(mask)
         edge_latents = self.encode_mask(edge)
 
-        if self.enable_vae_mask_encoding:
-            # This decides whether the input mask is sparse.
-            # If encoded with VAE, then the zero will (large probably) be mapped to a non-zero value.
-            conds.append(self.encode_image(dit_conditions["mask"], sample_mode))
-        else:
-            conds.append(mask_latents.clone())
+        null_conds = None
+        if null_dit_conditions is not None:
+            null_conds = [conds[0]]
+            if "mask" in null_dit_conditions:
+                null_conds.append(self.encode_image(null_dit_conditions["mask"], sample_mode))
 
         image_shapes.append((1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size))
         image_shapes.extend([(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in conds])
         image_shapes = [image_shapes] * noise.shape[0]
+
+        mask_null_image_shapes = None
+        if null_conds is not None:
+            mask_null_image_shapes = [
+                (1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size)
+            ]
+            mask_null_image_shapes.extend(
+                [(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in null_conds]
+            )
+            mask_null_image_shapes = [mask_null_image_shapes] * noise.shape[0]
 
         # Pack to 3D
         noise = QwenImageEditPlusPipeline._pack_latents(
@@ -447,6 +501,12 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         cond_latents = [
             QwenImageEditPlusPipeline._pack_latents(c, c.shape[0], c.shape[1], c.shape[-2], c.shape[-1]) for c in conds
         ]
+        mask_null_cond_latents = None
+        if null_conds is not None:
+            mask_null_cond_latents = [
+                QwenImageEditPlusPipeline._pack_latents(c, c.shape[0], c.shape[1], c.shape[-2], c.shape[-1])
+                for c in null_conds
+            ]
         mask_latents = QwenImageEditPlusPipeline._pack_latents(
             mask_latents, mask_latents.shape[0], mask_latents.shape[1], mask_latents.shape[-2], mask_latents.shape[-1]
         )
@@ -466,6 +526,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             edge_latents=edge_latents,
             negative_prompt_embeds=neg_prompt_embeds,
             negative_prompt_embeds_mask=neg_prompt_embeds_mask,
+            mask_null_prompt_embeds=mask_null_prompt_embeds,
+            mask_null_prompt_embeds_mask=mask_null_prompt_embeds_mask,
+            mask_null_conditions=mask_null_cond_latents,
+            mask_null_image_shapes=mask_null_image_shapes,
         )
 
     def compute_loss(
@@ -546,9 +610,15 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         return loss
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps: int = 50, cfg_scale: float = 4.0) -> list[torch.Tensor]:
+    def eval_step(
+        self,
+        batch,
+        num_inference_steps: int = 50,
+        cfg_scale: float = 4.0,
+        mask_cfg_scale: float = 4.0,
+    ) -> list[torch.Tensor]:
         preprocessed_data = self.preprocess_inputs(batch)
-        model_inputs = self.prepare_eval_inputs(preprocessed_data, cfg_scale)
+        model_inputs = self.prepare_eval_inputs(preprocessed_data, cfg_scale, mask_cfg_scale)
         xt = model_inputs.noise
         mask = preprocessed_data.mask
         edge = preprocessed_data.edge
@@ -565,10 +635,13 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
             for t, curr_sigma, next_sigma, d_sigma_dt in tqdm(inferencer, total=num_inference_steps):
+                curr_sigma = curr_sigma.to(xt.device)
+                next_sigma = next_sigma.to(xt.device)
+                d_sigma_dt = d_sigma_dt.to(xt.device)
                 hidden_states = torch.cat([xt] + [c for c in model_inputs.conditions], dim=1)
                 timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
 
-                pred = self.denoise(
+                pos_pred = self.denoise(
                     hidden_states=hidden_states,
                     timesteps=timestep,
                     prompt_embeds=model_inputs.prompt_embeds,
@@ -577,9 +650,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     img_seq_len=xt.shape[1],
                 )
 
-                # Do CFG
-                if cfg_scale > 1.0 and model_inputs.negative_prompt_embeds is not None:
-                    neg_pred = self.denoise(
+                text_cfg_enabled = cfg_scale != 1.0
+                mask_cfg_enabled = mask_cfg_scale != 1.0
+                if text_cfg_enabled or mask_cfg_enabled:
+                    null_text_mask_pred = self.denoise(
                         hidden_states=hidden_states,
                         timesteps=timestep,
                         prompt_embeds=model_inputs.negative_prompt_embeds,
@@ -587,10 +661,40 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                         img_shapes=model_inputs.image_shapes,
                         img_seq_len=xt.shape[1],
                     )
-                    cfg_pred = neg_pred + cfg_scale * (pred - neg_pred)
-                    pred_norm = torch.norm(pred, dim=-1, keepdim=True)
+
+                if mask_cfg_enabled:
+                    mask_null_hidden_states = torch.cat(
+                        [xt] + [c for c in model_inputs.mask_null_conditions], dim=1
+                    )
+                    null_text_null_mask_pred = self.denoise(
+                        hidden_states=mask_null_hidden_states,
+                        timesteps=timestep,
+                        prompt_embeds=model_inputs.mask_null_prompt_embeds,
+                        prompt_embeds_mask=model_inputs.mask_null_prompt_embeds_mask,
+                        img_shapes=model_inputs.mask_null_image_shapes,
+                        img_seq_len=xt.shape[1],
+                    )
+                    mask_residual = null_text_mask_pred - null_text_null_mask_pred
+                    if self.enable_mask_cfg_gating:
+                        mask_residual = mask_latents * mask_residual
+                    text_residual = pos_pred - null_text_mask_pred
+                    cfg_pred = (
+                        null_text_null_mask_pred
+                        + mask_cfg_scale * mask_residual
+                        + cfg_scale * text_residual
+                    )
+                elif text_cfg_enabled:
+                    # Preserve the original two-branch text CFG path exactly when mask CFG is disabled.
+                    cfg_pred = null_text_mask_pred + cfg_scale * (pos_pred - null_text_mask_pred)
+                else:
+                    cfg_pred = pos_pred
+
+                if text_cfg_enabled or mask_cfg_enabled:
+                    pred_norm = torch.norm(pos_pred, dim=-1, keepdim=True)
                     cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
                     pred = (pred_norm / cfg_norm) * cfg_pred
+                else:
+                    pred = pos_pred
 
                 if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() <= self.poisson_steps[1]:
                     # Predict clean endpoint
