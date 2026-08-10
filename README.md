@@ -21,7 +21,7 @@
 > 
 > 🎨 <u>**Dataset**</u>: The dataset is available on [🤗 Hugging Face](https://huggingface.co/datasets/ReyChiaro/MaskFlow).
 >
-> 🩵 <u>**Dem (Coming soon)**</u>: MaskFlow is integrated into [LightX2V](https://github.com/ModelTC/LightX2V) for an accessible inference workflow.
+> 🩵 <u>**Demo (Coming soon)**</u>: MaskFlow is integrated into [LightX2V](https://github.com/ModelTC/LightX2V) for an accessible inference workflow.
 >
 > ⭐️ **Please leave your star if these can help you to create attractive artworks** ⭐️
 
