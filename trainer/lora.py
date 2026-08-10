@@ -1,8 +1,6 @@
-import os
 import json
 import torch
 import dataclasses
-import torch.nn.functional as F
 
 from pathlib import Path
 from typing import Literal
@@ -15,8 +13,6 @@ from peft.utils import get_peft_model_state_dict
 from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
 
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
-from torchvision.utils import save_image
-
 from trainer.base_trainer import BaseTrainer
 from trainer.parallel.utils import wait_for_everyone
 from trainer.prompt_sampler.prompt_sampler import PromptSampler
@@ -171,66 +167,30 @@ class MaskFlowTrainer(LoraTrainer):
         if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
             return
 
-        save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
+        save_dir = Path(self.evaluation_dir) / f"step-{global_step}"
+        metadata_dir = save_dir / "metadata"
         if self.is_main_process:
-            os.makedirs(save_dir, exist_ok=True)
+            save_dir.mkdir(exist_ok=True, parents=True)
+            metadata_dir.mkdir(exist_ok=True, parents=True)
             logger.info(f"Evaluate start, save to {save_dir}.")
         wait_for_everyone()
 
-        for step, batch in enumerate(self.eval_loader):
-            batch = self.preprocess_eval_batch(batch, global_step)
+        rank_metadata_path = metadata_dir / f"rank-{self.global_rank:05d}.jsonl"
+        with open(rank_metadata_path, "w", encoding="utf-8") as metadata_file:
+            for step, batch in enumerate(self.eval_loader):
+                batch = self.preprocess_eval_batch(batch, global_step)
 
-            # The pipeline must support text CFG and mask CFG
-            output: dict[str, torch.Tensor] = self.pipe.eval_step(
-                batch=batch,
-                num_inference_steps=self.num_inference_steps,
-                text_cfg_scale=self.text_cfg_scale,
-                mask_cfg_scale=self.mask_cfg_scale,
-            )
+                # The pipeline must support text CFG and mask CFG
+                output: dict[str, torch.Tensor] = self.pipe.eval_step(
+                    batch=batch,
+                    num_inference_steps=self.num_inference_steps,
+                    text_cfg_scale=self.text_cfg_scale,
+                    mask_cfg_scale=self.mask_cfg_scale,
+                )
+                self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 
-            # -------- Try to save the evaluation results -------- #
-            prompt: list[str] = batch.get("prompt", [""])
-            neg_prompt: list[str] = batch.get("negative_prompt", [""])
-            conditions: dict[str, torch.Tensor] | None = batch.get("conditions", None)
-            target: torch.Tensor | None = batch.get("target", None)
-            image_name = batch.get("image_name", None)
-
-            for batch_idx in range(len(prompt)):
-                tensors = []
-
-                if conditions is not None:
-                    tensors.extend([conditions[k][batch_idx] for k in conditions])
-
-                if target is not None:
-                    tensors.append(target[batch_idx])
-
-                tensors.extend([output[k][batch_idx] for k in output])
-                p = prompt[batch_idx]
-                np = neg_prompt[batch_idx]
-
-                save_name = f"batch_{batch_idx}"
-                if image_name is not None:
-                    save_name = image_name[batch_idx]
-
-                max_h = max([t.shape[-2] for t in tensors])
-                tensors = [
-                    F.pad(
-                        input=t,
-                        pad=(0, 0, 0, max_h - t.shape[1]),
-                        mode="constant",
-                        value=0,
-                    ).to(self.device, dtype=self._eval_dtype)
-                    for t in tensors
-                ]
-                tensors = torch.cat(tensors, dim=-1)
-
-                save_path = os.path.join(save_dir, f"{save_name}.jpg")
-                save_image(tensors, save_path)
-
-                with open(os.path.join(save_dir, "prompt.jsonl"), "a") as f:
-                    f.write(json.dumps({"prompt": p, "negative_prompt": np}) + "\n")
-
-                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {save_name}")
+        wait_for_everyone()
+        self._merge_eval_metadata(save_dir, metadata_dir)
 
         if self.is_main_process:
             logger.info(f"Evaluation finished, saved to {save_dir}.")

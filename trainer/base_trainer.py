@@ -441,6 +441,94 @@ class BaseTrainer:
         """
         pass
 
+    @staticmethod
+    def _safe_eval_file_component(value: object) -> str:
+        r"""Return a path-safe, human-readable component for evaluation artifacts."""
+        component = Path(str(value)).stem
+        component = component.replace("/", "_").replace("\\", "_")
+        return component or "sample"
+
+    def _save_eval_batch(
+        self,
+        batch,
+        output: dict[str, torch.Tensor],
+        save_dir: Path,
+        dataloader_step: int,
+        metadata_file,
+    ):
+        r"""Save one rank-local evaluation batch without sharing writable files."""
+        prompt: list[str] = batch.get("prompt", [""])
+        neg_prompt: list[str] = batch.get("negative_prompt", [""])
+        conditions: dict[str, torch.Tensor] | None = batch.get("conditions", None)
+        target: torch.Tensor | None = batch.get("target", None)
+        image_name = batch.get("image_name", None)
+
+        for batch_idx in range(len(prompt)):
+            tensors = []
+
+            if conditions is not None:
+                tensors.extend([conditions[k][batch_idx] for k in conditions])
+
+            if target is not None:
+                tensors.append(target[batch_idx])
+
+            tensors.extend([output[k][batch_idx] for k in output])
+            p = prompt[batch_idx]
+            np = neg_prompt[batch_idx]
+
+            source_name = image_name[batch_idx] if image_name is not None else "sample"
+            source_name = self._safe_eval_file_component(source_name)
+            save_name = (
+                f"{source_name}__rank-{self.global_rank:01d}"
+                f"_batch-{dataloader_step:04d}_item-{batch_idx:04d}"
+            )
+
+            max_h = max([t.shape[-2] for t in tensors])
+            tensors = [
+                F.pad(
+                    input=t,
+                    pad=(0, 0, 0, max_h - t.shape[1]),
+                    mode="constant",
+                    value=0,
+                ).to(self.device, dtype=self._eval_dtype)
+                for t in tensors
+            ]
+            tensors = torch.cat(tensors, dim=-1)
+
+            save_image(tensors, save_dir / f"{save_name}.jpg")
+            metadata_file.write(
+                json.dumps(
+                    {
+                        "image_name": save_name,
+                        "source_image_name": source_name,
+                        "prompt": p,
+                        "negative_prompt": np,
+                        "rank": self.global_rank,
+                        "dataloader_step": dataloader_step,
+                        "batch_index": batch_idx,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+            logger.info(f"Eval [{dataloader_step + 1}/{len(self.eval_loader)}] {save_name}")
+
+    def _merge_eval_metadata(self, save_dir: Path, metadata_dir: Path):
+        r"""Merge rank-local JSONL files into one deterministic, atomic index."""
+        if not self.is_main_process:
+            return
+
+        merged_path = save_dir / "prompt.jsonl"
+        temporary_path = save_dir / "prompt.jsonl.tmp"
+        with open(temporary_path, "w", encoding="utf-8") as merged_file:
+            for rank in range(self.world_size):
+                rank_path = metadata_dir / f"rank-{rank:05d}.jsonl"
+                with open(rank_path, "r", encoding="utf-8") as rank_file:
+                    for line in rank_file:
+                        merged_file.write(line)
+        os.replace(temporary_path, merged_path)
+
     def train(self):
         r"""
         Train pipeline.
@@ -530,59 +618,23 @@ class BaseTrainer:
         if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
             return
 
-        save_dir = os.path.join(self.evaluation_dir, f"step-{global_step}")
+        save_dir = Path(self.evaluation_dir) / f"step-{global_step}"
+        metadata_dir = save_dir / "metadata"
         if self.is_main_process:
-            os.makedirs(save_dir, exist_ok=True)
+            save_dir.mkdir(exist_ok=True, parents=True)
+            metadata_dir.mkdir(exist_ok=True, parents=True)
             logger.info(f"Evaluate start, save to {save_dir}.")
         wait_for_everyone()
 
-        for step, batch in enumerate(self.eval_loader):
-            batch = self.preprocess_eval_batch(batch, global_step)
-            output: dict[str, torch.Tensor] = self.pipe.eval_step(batch, self.num_inference_steps, self.text_cfg_scale)
+        rank_metadata_path = metadata_dir / f"rank-{self.global_rank:05d}.jsonl"
+        with open(rank_metadata_path, "w", encoding="utf-8") as metadata_file:
+            for step, batch in enumerate(self.eval_loader):
+                batch = self.preprocess_eval_batch(batch, global_step)
+                output: dict[str, torch.Tensor] = self.pipe.eval_step(batch, self.num_inference_steps)
+                self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 
-            # -------- Try to save the evaluation results -------- #
-            prompt: list[str] = batch.get("prompt", [""])
-            neg_prompt: list[str] = batch.get("negative_prompt", [""])
-            conditions: dict[str, torch.Tensor] | None = batch.get("conditions", None)
-            target: torch.Tensor | None = batch.get("target", None)
-            image_name = batch.get("image_name", None)
-
-            for batch_idx in range(len(prompt)):
-                tensors = []
-
-                if conditions is not None:
-                    tensors.extend([conditions[k][batch_idx] for k in conditions])
-
-                if target is not None:
-                    tensors.append(target[batch_idx])
-
-                tensors.extend([output[k][batch_idx] for k in output])
-                p = prompt[batch_idx]
-                np = neg_prompt[batch_idx]
-
-                save_name = f"batch_{batch_idx}"
-                if image_name is not None:
-                    save_name = image_name[batch_idx]
-
-                max_h = max([t.shape[-2] for t in tensors])
-                tensors = [
-                    F.pad(
-                        input=t,
-                        pad=(0, 0, 0, max_h - t.shape[1]),
-                        mode="constant",
-                        value=0,
-                    ).to(self.device, dtype=self._eval_dtype)
-                    for t in tensors
-                ]
-                tensors = torch.cat(tensors, dim=-1)
-
-                save_path = os.path.join(save_dir, f"{save_name}.jpg")
-                save_image(tensors, save_path)
-
-                with open(os.path.join(save_dir, "prompt.jsonl"), "a") as f:
-                    f.write(json.dumps({"prompt": p, "negative_prompt": np}) + "\n")
-
-                logger.info(f"Eval [{step+1}/{len(self.eval_loader)}] {save_name}")
+        wait_for_everyone()
+        self._merge_eval_metadata(save_dir, metadata_dir)
 
         if self.is_main_process:
             logger.info(f"Evaluation finished, saved to {save_dir}.")
