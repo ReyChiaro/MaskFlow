@@ -9,7 +9,15 @@
 
   function renderAuthors() {
     $("[data-authors]").innerHTML = config.authors
-      .map((author) => `<span>${author.name}<sup>${author.affiliation}</sup></span>`)
+      .map((author) => {
+        const marker = `${author.affiliation}${author.corresponding ? ",*" : ""}`;
+        const href = author.href || "";
+        const attributes = href.startsWith("http") ? ' target="_blank" rel="noreferrer"' : "";
+        const name = href
+          ? `<a class="author-link" href="${href}"${attributes}>${author.name}</a>`
+          : author.name;
+        return `<span>${name}<sup>${marker}</sup></span>`;
+      })
       .join('<span class="author-separator" aria-hidden="true">·</span>');
   }
 
@@ -17,7 +25,7 @@
     const classes = ["resource-button", compact ? "compact" : "", resource.primary ? "primary" : ""]
       .filter(Boolean)
       .join(" ");
-    const content = `<strong>${resource.label}</strong>`;
+    const content = `<span class="resource-icon resource-icon-${resource.id}" aria-hidden="true"></span><strong>${resource.label}</strong>`;
     if (!resource.href) {
       return `<span class="${classes} disabled" aria-disabled="true" title="${resource.note || "Coming soon"}">${content}<small>${resource.note || "Soon"}</small></span>`;
     }
@@ -25,7 +33,7 @@
   }
 
   function renderResources() {
-    $("[data-resources]").innerHTML = config.resources.slice(0, 4).map((item) => resourceMarkup(item)).join("");
+    $("[data-resources]").innerHTML = config.resources.map((item) => resourceMarkup(item)).join("");
     const primary = config.resources.find((item) => item.primary) || config.resources[0];
     $("[data-primary-resource]").innerHTML = resourceMarkup(primary, true);
     const dataset = config.resources.find((item) => item.id === "dataset");
@@ -40,7 +48,6 @@
         (item) => `
           <figure class="figure-block result-figure reveal" data-zoomable>
             <div class="figure-heading">
-              <span>${item.kicker}</span>
               <h3>${item.title}</h3>
             </div>
             <div class="image-frame">
