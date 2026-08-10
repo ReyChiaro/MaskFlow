@@ -675,8 +675,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
     @staticmethod
     def rescale_cfg_prediction(cfg_pred: torch.Tensor, pos_pred: torch.Tensor) -> torch.Tensor:
-        pos_norm = torch.norm(pos_pred, dim=-1, keepdim=True)
-        cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
+        pos_norm = torch.norm(pos_pred, dim=-1, keepdim=True).clamp_min(1e-6)
+        cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True).clamp_min(1e-6)
         return (pos_norm / cfg_norm) * cfg_pred
 
     def combine_cfg_predictions(

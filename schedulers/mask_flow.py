@@ -119,5 +119,5 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         #     xt = mask * xt + (1 - mask) * source
         # elif self.unmask_with in ["noisy_source", "noisy_target"]:
         #     xt = mask * xt + (1 - mask) * ((1.0 - sigma) * source + sigma * noise)
-        # return xt - sigma * v
-        return xt - (sigma / d_sigma_dt) * v
+        return xt - sigma * v
+        # return xt - (sigma / d_sigma_dt) * v
