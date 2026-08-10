@@ -4,10 +4,11 @@
 
 <p align="center">
   <a href="https://reychiaro.github.io/MaskFlow"><img src="https://img.shields.io/badge/Project_Page-7C3AED?logo=googlechrome&amp;logoColor=white" alt="Project Page" /></a>
-  <a href="https://huggingface.co/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/Hugging_Face-Model-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Model" /></a>
-  <a href="https://huggingface.co/ReyChiaro/MaskEdit"><img src="https://img.shields.io/badge/Hugging_Face-Dataset-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Dataset" /></a>
-  <a href="https://github.com/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/GitHub-Source-E38DA7?logo=github&amp;logoColor=white" alt="GitHub Model" /></a>
   <a href="https://arxiv.org/abs/2608.06929"><img src="https://img.shields.io/badge/arXiv-Paper-751D38?logo=arxiv&amp;logoColor=white" alt="arXiv Paper" /></a>
+  <a href="https://github.com/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/GitHub-Code-E38DA7?logo=github&amp;logoColor=white" alt="GitHub Code" /></a>
+  <a href="https://huggingface.co/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/Hugging_Face-Model-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Model" /></a>
+  <a href="https://huggingface.co/datasets/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/Hugging_Face-Dataset-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Dataset" /></a>
+  <a href="https://github.com/ModelTC/LightX2V"><img src="https://img.shields.io/badge/LightX2V-Demo-67A7E8?logo=github&amp;logoColor=white" alt="LightX2V Demo" /></a>
 </p>
 
 > ## Overview
@@ -18,17 +19,15 @@
 > - Trainers
 > - Evaluators
 > 
-> 🎨 <u>**Dataset**</u>: The dataset is available in [🤗MaskEdit](https://huggingface.co/datasets/ReyChiaro/MaskEdit)
+> 🎨 <u>**Dataset**</u>: The dataset is available on [🤗 Hugging Face](https://huggingface.co/datasets/ReyChiaro/MaskFlow).
 >
-> 🩵 <u>**Online Demo**</u>: The mask editing capability **will** be merged into [LightX2V](https://github.com/ModelTC/LightX2V/tree/main), try [LightX2V Studio](https://x2v.light-ai.top/login) for online experience~
+> 🩵 <u>**Dem (Coming soon)**</u>: MaskFlow is integrated into [LightX2V](https://github.com/ModelTC/LightX2V) for an accessible inference workflow.
 >
 > ⭐️ **Please leave your star if these can help you to create attractive artworks** ⭐️
 
 ## Introduction
 
 MaskFlow is a mask-aware framework for precise regional image editing. Given a source image, a spatial mask, and a text instruction, it edits the selected region while preserving the surrounding content. Its localized generation process and Soft-Poisson refinement improve regional control, background consistency, and boundary quality.
-
-<!-- Fill the empty href attributes above when the project resources are released. -->
 
 ## Quick Start
 
@@ -181,14 +180,14 @@ To improve efficiency for practical deployment, we apply Distribution Matching D
 
 ## Citation
 
-```plaintext
+```bibtex
 @misc{xu2026maskflowpreciseconsistentseamless,
-      title={MaskFlow: Precise, Consistent and Seamless Regional Image Editing}, 
-      author={Rui Xu and Yang Yong and Shunzi Yang and Ruihao Gong and Chengtao Lv},
-      year={2026},
-      eprint={2608.06929},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2608.06929}, 
-```
+  title={MaskFlow: Precise, Consistent and Seamless Regional Image Editing},
+  author={Rui Xu and Yang Yong and Shunzi Yang and Ruihao Gong and Chengtao Lv},
+  year={2026},
+  eprint={2608.06929},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV},
+  url={https://arxiv.org/abs/2608.06929},
+}
 ```
