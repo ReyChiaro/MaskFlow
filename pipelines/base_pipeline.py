@@ -184,7 +184,7 @@ class BasePipeline:
         pass
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps: int = 50, cfg_scale: float = 0.0, **kwargs):
+    def eval_step(self, batch, num_inference_steps: int, **kwargs):
         pass
 
     @torch.inference_mode()

@@ -213,7 +213,7 @@ def evaluate(cfgs: OmegaConf):
         raise AttributeError(f"{type(pipe).__name__} does not implement eval_step.")
 
     num_inference_steps = int(_select(cfgs, "num_inference_steps", 50))
-    cfg_scale = float(_select(cfgs, "cfg_scale", 1.0))
+    text_cfg_scale = float(_select(cfgs, "text_cfg_scale", 1.0))
     mask_cfg_scale = float(_select(cfgs, "mask_cfg_scale", 1.0))
 
     batch_start = 0
@@ -226,7 +226,7 @@ def evaluate(cfgs: OmegaConf):
         output: dict[str, torch.Tensor] = pipe.eval_step(
             batch,
             num_inference_steps=num_inference_steps,
-            cfg_scale=cfg_scale,
+            text_cfg_scale=text_cfg_scale,
             **eval_kwargs,
         )
         outputs = _normalize_outputs(output)

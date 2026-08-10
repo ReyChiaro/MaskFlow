@@ -113,6 +113,7 @@ def build_pipeline(
         mask_blur_sigma=args.mask_blur_sigma,
         mask_edge_width=args.mask_edge_width,
         enable_vae_mask_encoding=args.enable_vae_mask_encoding,
+        cfg_type=args.cfg_type,
         mask_cfg_null_type=args.mask_cfg_null_type,
         enable_mask_cfg_gating=args.enable_mask_cfg_gating,
         enable_masked_loss=args.enable_masked_loss,
@@ -206,7 +207,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", type=parse_dtype, default=torch.bfloat16, help="bf16, fp16, or fp32.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-inference-steps", type=int, default=50)
-    parser.add_argument("--cfg-scale", type=float, default=1.0)
+    parser.add_argument("--text-cfg-scale", type=float, default=1.0)
     parser.add_argument("--mask-cfg-scale", type=float, default=1.0)
     parser.add_argument("--mask-threshold", type=float, default=0.5)
     parser.add_argument("--save-debug", action="store_true", help="Also save mask/edge/output tensors next to output.")
@@ -217,6 +218,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mask-blur-sigma", type=float, default=25)
     parser.add_argument("--mask-edge-width", type=int, default=50)
     parser.add_argument("--enable-vae-mask-encoding", type=str2bool, default=True)
+    parser.add_argument("--cfg-type", choices=["progressive", "condition_weighted"], default="condition_weighted")
     parser.add_argument("--mask-cfg-null-type", choices=["full_one", "null"], default="full_one")
     parser.add_argument("--enable-mask-cfg-gating", type=str2bool, default=False)
     parser.add_argument("--enable-masked-loss", type=str2bool, default=True)
@@ -284,13 +286,14 @@ def main():
     batch = build_batch(args)
     log_msg = (
         f"Run {args.pipeline} inference on {args.source} with {args.num_inference_steps} steps, "
-        f"cfg_scale={args.cfg_scale}"
+        f"text_cfg_scale={args.text_cfg_scale}"
     )
     if args.pipeline == "qwenimage_mask_flow":
         log_msg += (
             f", unmask_with={args.unmask_with}, pixel_blend={args.enable_pixel_blend}, "
             f"poisson_infer={args.enable_poisson_infer}, mask_cfg_scale={args.mask_cfg_scale}, "
-            f"mask_cfg_null_type={args.mask_cfg_null_type}, mask_cfg_gating={args.enable_mask_cfg_gating}"
+            f"cfg_type={args.cfg_type}, mask_cfg_null_type={args.mask_cfg_null_type}, "
+            f"mask_cfg_gating={args.enable_mask_cfg_gating}"
         )
     logger.info(log_msg + ".")
 
@@ -299,7 +302,10 @@ def main():
         if args.pipeline == "qwenimage_mask_flow":
             eval_kwargs["mask_cfg_scale"] = args.mask_cfg_scale
         outputs = pipe.eval_step(
-            batch, num_inference_steps=args.num_inference_steps, cfg_scale=args.cfg_scale, **eval_kwargs
+            batch,
+            num_inference_steps=args.num_inference_steps,
+            text_cfg_scale=args.text_cfg_scale,
+            **eval_kwargs,
         )
 
     save_outputs(outputs, args.output, args.save_debug)

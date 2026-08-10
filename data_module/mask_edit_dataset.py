@@ -66,9 +66,9 @@ class MaskEditDataset(SchemaDataset):
 
         return {
             "image_name": image_name,
-            "prompt": self._preprocess_prompt(prompt),
+            "prompt": self._preprocess_prompt(prompt),  # Prompt without position cues
             "negative_prompt": negative_prompt,
-            "edit_instruction": edit_instruction,
+            "edit_instruction": edit_instruction,       # Prompt with position cues
             "conditions": self._preprocess_conditions(conditions),
             "target": self._preprocess_target(target),
         }
