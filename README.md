@@ -7,7 +7,7 @@
   <a href="https://huggingface.co/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/Hugging_Face-Model-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Model" /></a>
   <a href="https://huggingface.co/ReyChiaro/MaskEdit"><img src="https://img.shields.io/badge/Hugging_Face-Dataset-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Dataset" /></a>
   <a href="https://github.com/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/GitHub-Source-E38DA7?logo=github&amp;logoColor=white" alt="GitHub Model" /></a>
-  <a href=""><img src="https://img.shields.io/badge/arXiv-Paper-751D38?logo=arxiv&amp;logoColor=white" alt="arXiv Paper" /></a>
+  <a href="https://arxiv.org/abs/2608.06929"><img src="https://img.shields.io/badge/arXiv-Paper-751D38?logo=arxiv&amp;logoColor=white" alt="arXiv Paper" /></a>
 </p>
 
 > ## Overview
@@ -181,4 +181,14 @@ To improve efficiency for practical deployment, we apply Distribution Matching D
 
 ## Citation
 
-<!-- Citation will be added after the paper is released. -->
+```plaintext
+@misc{xu2026maskflowpreciseconsistentseamless,
+      title={MaskFlow: Precise, Consistent and Seamless Regional Image Editing}, 
+      author={Rui Xu and Yang Yong and Shunzi Yang and Ruihao Gong and Chengtao Lv},
+      year={2026},
+      eprint={2608.06929},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2608.06929}, 
+```
+```
