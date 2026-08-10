@@ -3,9 +3,9 @@
   <desc id="description">A minimal purple-to-pink flowing banner for MaskFlow.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#eee7ff"/>
-      <stop offset="0.52" stop-color="#f4e5fa"/>
-      <stop offset="1" stop-color="#ffe4f1"/>
+      <stop offset="0" stop-color="#D9F9DF"/>
+      <stop offset="0.52" stop-color="#AEE2FF"/>
+      <stop offset="1" stop-color="#B5BAFF"/>
     </linearGradient>
     <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#a855f7" stop-opacity="0"/>
@@ -24,5 +24,5 @@
   <circle cx="165" cy="72" r="52" fill="#a855f7" opacity="0.05"/>
   <circle cx="1055" cy="198" r="76" fill="#ec4899" opacity="0.05"/>
 
-  <text x="600" y="151" fill="#6d28a8" font-family="'Comic Sans MS', cursive" font-size="96" font-weight="700" letter-spacing="1" text-anchor="middle">MaskFlow</text>
+  <text x="600" y="151" fill="#723EC3" font-family="'Comic Sans MS', cursive" font-size="96" font-weight="480" letter-spacing="1" text-anchor="middle">MaskFlow</text>
 </svg>
