@@ -25,7 +25,7 @@ cfg_type: ${pipeline.cfg_type}  # progressive | condition_weighted
 
 max_grad_norm: 1.0
 max_training_steps: 5000
-save_steps: 1000
+save_steps: 2500
 eval_steps: 2500
 mixed_precision: bf16
 enable_gradient_checkpoint: true
