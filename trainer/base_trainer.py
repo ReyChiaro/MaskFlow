@@ -111,14 +111,16 @@ class BaseTrainer:
     def _init_context(self):
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.global_rank = int(os.environ.get("RANK", 0))
-        self.device = torch.device(self.global_rank % torch.cuda.device_count())
+        self.local_rank = int(os.environ.get("LOCAL_RANK", self.global_rank % torch.cuda.device_count()))
+        self.device = torch.device("cuda", self.local_rank)
 
         # Init FSDP if required
-        dist.init_process_group(
-            "nccl",
-            device_id=self.device,
-            timeout=timedelta(seconds=self.distributed_timeout_seconds),
-        )
+        if not dist.is_initialized():
+            dist.init_process_group(
+                "nccl",
+                device_id=self.device,
+                timeout=timedelta(seconds=self.distributed_timeout_seconds),
+            )
         parallel_handler.setup_parallel()
 
         # Init FSDP attributes
