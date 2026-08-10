@@ -19,15 +19,7 @@ window.MASKFLOW_SITE_CONFIG = {
     { id: "demo", label: "Demo", href: "", note: "Coming soon" },
     { id: "dataset", label: "Dataset", href: "", note: "https://huggingface.co/datasets/ReyChiaro/MaskFlow" },
   ],
-  citation: "@misc{xu2026maskflowpreciseconsistentseamless,
-      title={MaskFlow: Precise, Consistent and Seamless Regional Image Editing}, 
-      author={Rui Xu and Yang Yong and Shunzi Yang and Ruihao Gong and Chengtao Lv},
-      year={2026},
-      eprint={2608.06929},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2608.06929}, 
-}",
+  citation: "",
   resultFigures: [
     {
       id: "comparison",
