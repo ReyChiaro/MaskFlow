@@ -13,3 +13,8 @@ defaults:
 hydra:
   run:
     dir: ${project.output_dir}/hydra-configs
+  output_subdir: .hydra/rank-${oc.env:RANK,0}
+  job_logging:
+    handlers:
+      file:
+        filename: ${hydra.runtime.output_dir}/${hydra.job.name}-rank-${oc.env:RANK,0}.log
