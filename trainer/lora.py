@@ -5,6 +5,7 @@ import dataclasses
 import torch.nn.functional as F
 
 from pathlib import Path
+from typing import Literal
 from omegaconf import OmegaConf
 from loguru import logger
 from safetensors.torch import save_file
@@ -25,7 +26,7 @@ from trainer.prompt_sampler.prompt_sampler import PromptSampler
 class LoraTrainer(BaseTrainer):
 
     lora_configs: OmegaConf | None = None
-    adapter_state_dict_dir: str = "adapter"
+    adapter_state_dict_dir: str = "lora_adapter"
 
     def _init_trainable(self):
         # Adapter configs is list of target_modules
@@ -89,15 +90,8 @@ class LoraTrainer(BaseTrainer):
         save_file(lora_state_dict, save_path, metadata=metadata)
         logger.info(f"LoRA safetensors saved to {save_path}.")
 
-    def preprocess_train_batch(self, batch, step: int, cfg_dropout: float | None = None):
-        if cfg_dropout is not None:
-            if "edit_instruction" in batch:
-                batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in batch["edit_instruction"]]
-            else:
-                batch["prompt"] = ["" if self.rng.random() < cfg_dropout else p for p in batch["prompt"]]
-        return batch
-
-    def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
+    def preprocess_eval_batch(self, batch, step: int):
+        r"""LoraTrainer will use prompt with position cues to evlauate."""
         if "edit_instruction" in batch:
             batch["prompt"] = [p for p in batch["edit_instruction"]]
         return batch
@@ -118,38 +112,60 @@ class MaskFlowTrainer(LoraTrainer):
 
     prompt_sampler_cfgs: OmegaConf = None
 
-    mask_cfg_dropout: float = 0.1
-    mask_cfg_scale: float = 4.0
+    # Mirrored from pipeline.cfg_type by the trainer config interpolation.
+    cfg_type: Literal["progressive", "condition_weighted"] = "condition_weighted"
+
+    mask_cfg_dropout: float = 0.0
+    mask_cfg_scale: float = 1.0
 
     def __post_init__(self):
         super().__post_init__()
-        if self.cfg_dropout + self.mask_cfg_dropout > 1.0:
-            raise ValueError("cfg_dropout + mask_cfg_dropout must be <= 1 for mutually exclusive CFG dropout.")
+        if self.cfg_type not in {"progressive", "condition_weighted"}:
+            raise ValueError(f"Unsupported cfg_type: {self.cfg_type}.")
+        if self.text_cfg_dropout + self.mask_cfg_dropout > 1.0:
+            raise ValueError("text_cfg_dropout + mask_cfg_dropout must be <= 1 for mutually exclusive CFG dropout.")
         self.prompt_sampler = PromptSampler(**self.prompt_sampler_cfgs)
 
-    def preprocess_train_batch(self, batch, step: int, cfg_dropout: float | None = None):
+    def preprocess_train_batch(self, batch, step: int):
+        # Sample prompt based on the given probability
         runtime_prompt = self.prompt_sampler.sample_batch(
             tuple(zip(batch["edit_instruction"], batch["prompt"])),
             step,
         )
-        cfg_dropout = cfg_dropout or 0.0
+
+        # Handle the CFG dropout
+        # Text dropout always drops only the prompt. Mask dropout drops the
+        # VLM/DiT mask and additionally drops the prompt for progressive CFG.
+        #
+        # The CFG includes two types
+        # Type I: `progressive`
+        #   v(M,P) <- v(null,null) + s_M (v(M,null) - v(null,null)) + s_T (v(M,P) - v(M,null))
+        # Type II: `condition_weighted`
+        #   v_T <- v(M,P) + (s_T - 1) (v(M,P) - v(M,null))
+        #   v_M <- v(M,P) + (s_M - 1) (v(M,P) - v(null,P))
+        #   v(M,P) <- 0.5 * (rescale(v_T) + rescale(v_M))
         dropout_sample = self.rng.random()
-        if dropout_sample < cfg_dropout:
+        if dropout_sample < self.text_cfg_dropout:
             batch["prompt"] = ["" for _ in runtime_prompt]
             batch["mask_cfg_dropped"] = False
-        elif dropout_sample < cfg_dropout + self.mask_cfg_dropout:
-            batch["prompt"] = ["" for _ in runtime_prompt]
+        elif dropout_sample < self.text_cfg_dropout + self.mask_cfg_dropout:
+            if self.cfg_type == "progressive":
+                batch["prompt"] = ["" for _ in runtime_prompt]
+            else:
+                batch["prompt"] = runtime_prompt
             batch["mask_cfg_dropped"] = True
         else:
             batch["prompt"] = runtime_prompt
             batch["mask_cfg_dropped"] = False
         return batch
 
-    def preprocess_eval_batch(self, batch, step: int, cfg_dropout: float | None = None):
+    def preprocess_eval_batch(self, batch, step: int):
         return batch
 
     @torch.inference_mode()
     def evaluate(self, global_step: int):
+        r"""Method for inference during training"""
+
         if self.eval_loader is None:
             return
         if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
@@ -163,8 +179,13 @@ class MaskFlowTrainer(LoraTrainer):
 
         for step, batch in enumerate(self.eval_loader):
             batch = self.preprocess_eval_batch(batch, global_step)
+
+            # The pipeline must support text CFG and mask CFG
             output: dict[str, torch.Tensor] = self.pipe.eval_step(
-                batch, self.num_inference_steps, self.cfg_scale, self.mask_cfg_scale
+                batch=batch,
+                num_inference_steps=self.num_inference_steps,
+                text_cfg_scale=self.text_cfg_scale,
+                mask_cfg_scale=self.mask_cfg_scale,
             )
 
             # -------- Try to save the evaluation results -------- #

@@ -33,8 +33,6 @@ class QwenImageEditPlus(BasePipeline):
     device: torch.device | None = None
     dtype: torch.dtype | None = None
 
-    cfg_dropout: float = 0.0
-
     vae: AutoencoderKLQwenImage = field(init=False, default=None)
     transformer: QwenImageTransformer2DModel = field(init=False, default=None)
     text_pipeline: QwenImageEditPlusPipeline = field(init=False, default=None)
@@ -220,11 +218,15 @@ class QwenImageEditPlus(BasePipeline):
             image_shapes=image_shapes,
         )
 
-    def prepare_eval_inputs(self, preprocessed_data: PreprocessOutput, cfg_scale: float = 1.0) -> QwenForwardOutput:
+    def prepare_eval_inputs(
+        self,
+        preprocessed_data: PreprocessOutput,
+        text_cfg_scale: float = 1.0,
+    ) -> QwenForwardOutput:
         r"""
         Prepare training evaluation inputs.
         The sample mode for VAE is fixed to `argmax`, `target` must be provided.
-        `cfg_scale` can be provided for negative_prompt encoding.
+        `text_cfg_scale` can be provided for negative_prompt encoding.
         """
         sample_mode = "argmax"
 
@@ -232,7 +234,7 @@ class QwenImageEditPlus(BasePipeline):
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
 
         neg_prompt_embeds, neg_prompt_embeds_mask = None, None
-        if cfg_scale > 1.0:
+        if text_cfg_scale > 1.0:
             negative_prompt = preprocessed_data.negative_prompt
             neg_prompt_embeds, neg_prompt_embeds_mask = self.encode_prompt(
                 negative_prompt, preprocessed_data.vlm_conditions
@@ -325,12 +327,17 @@ class QwenImageEditPlus(BasePipeline):
         return loss
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps: int = 50, cfg_scale: float = 4.0) -> list[torch.Tensor]:
+    def eval_step(
+        self,
+        batch,
+        num_inference_steps: int = 50,
+        text_cfg_scale: float = 1.0,
+    ) -> list[torch.Tensor]:
         r"""
         Mainly used for evaluate batched data with given target images.
         """
         preprocessed_data = self.preprocess_inputs(batch)
-        model_inputs = self.prepare_eval_inputs(preprocessed_data, cfg_scale)
+        model_inputs = self.prepare_eval_inputs(preprocessed_data, text_cfg_scale)
 
         xt = model_inputs.noise
         # with self.scheduler.inference_sampler(xt, num_inference_steps, xt.shape[1]) as sampler:
@@ -349,7 +356,7 @@ class QwenImageEditPlus(BasePipeline):
                 )
 
                 # Do CFG
-                if cfg_scale > 1.0 and model_inputs.negative_prompt_embeds is not None:
+                if text_cfg_scale > 1.0 and model_inputs.negative_prompt_embeds is not None:
                     neg_pred = self.denoise(
                         hidden_states=hidden_states,
                         timesteps=timestep,
@@ -358,7 +365,7 @@ class QwenImageEditPlus(BasePipeline):
                         img_shapes=model_inputs.image_shapes,
                         img_seq_len=xt.shape[1],
                     )
-                    cfg_pred = neg_pred + cfg_scale * (pred - neg_pred)
+                    cfg_pred = neg_pred + text_cfg_scale * (pred - neg_pred)
                     pred_norm = torch.norm(pred, dim=-1, keepdim=True)
                     cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
                     pred = (pred_norm / cfg_norm) * cfg_pred
