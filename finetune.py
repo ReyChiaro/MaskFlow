@@ -1,9 +1,11 @@
 import hydra
-from diffusers.pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from omegaconf import OmegaConf
 from hydra.utils import instantiate
 from trainer.base_trainer import BaseTrainer
 from loguru import logger
+from utils.config import register_distributed_timestamp_resolver
+
+register_distributed_timestamp_resolver()
 
 
 @hydra.main(config_path="configs", config_name="train", version_base="v1.2")
