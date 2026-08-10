@@ -31,6 +31,15 @@ class QwenMaskFlowPreprocessOutput(PreprocessOutput):
 
 
 @dataclasses.dataclass
+class QwenMaskFlowCFGBranch:
+
+    prompt_embeds: torch.Tensor
+    prompt_embeds_mask: torch.Tensor
+    conditions: list[torch.Tensor]
+    image_shapes: list
+
+
+@dataclasses.dataclass
 class QwenMaskFlowForwardOutput(QwenForwardOutput):
 
     loss_weights: torch.Tensor | None = None
@@ -41,10 +50,7 @@ class QwenMaskFlowForwardOutput(QwenForwardOutput):
 
     mask_ratio: torch.Tensor | None = None
 
-    mask_null_prompt_embeds: torch.Tensor | None = None
-    mask_null_prompt_embeds_mask: torch.Tensor | None = None
-    mask_null_conditions: list[torch.Tensor] | None = None
-    mask_null_image_shapes: list | None = None
+    cfg_branches: dict[str, QwenMaskFlowCFGBranch] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -73,7 +79,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     mask_loss_weight: float = 1.0
     edge_loss_weight: float = 0.0
 
+    # Always true
     enable_vae_mask_encoding: bool = True
+
+    cfg_type: Literal["progressive", "condition_weighted"] = "condition_weighted"
     mask_cfg_null_type: Literal["full_one", "null"] = "null"
     enable_mask_cfg_gating: bool = False
 
@@ -92,6 +101,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     poisson_lambda_s: float = 0.1
     poisson_num_iter: int = 50
     poisson_momentum: float = 0.1
+
+    def __post_init__(self):
+        if self.cfg_type not in {"progressive", "condition_weighted"}:
+            raise ValueError(f"Unsupported cfg_type: {self.cfg_type}.")
+        super().__post_init__()
 
     # ---------------- Mask Operations ---------------- #
     def dilate_mask(self, mask: torch.Tensor, ks: int | None = None) -> torch.Tensor:
@@ -409,7 +423,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     def prepare_eval_inputs(
         self,
         preprocessed_data: QwenMaskFlowPreprocessOutput,
-        cfg_scale: float = 1.0,
+        text_cfg_scale: float = 1.0,
         mask_cfg_scale: float = 1.0,
     ) -> QwenMaskFlowForwardOutput:
         r"""
@@ -422,17 +436,22 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             logger.warning(
                 f"QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
             )
-            return super().prepare_eval_inputs(preprocessed_data, cfg_scale)
+            return super().prepare_eval_inputs(preprocessed_data, text_cfg_scale)
 
         prompt = preprocessed_data.prompt
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
 
-        text_cfg_enabled = cfg_scale != 1.0
-        mask_cfg_enabled = mask_cfg_scale != 1.0
+        text_cfg_enabled = text_cfg_scale > 1.0
+        mask_cfg_enabled = mask_cfg_scale > 1.0
+        need_nm_branch = text_cfg_enabled or (self.cfg_type == "progressive" and mask_cfg_enabled)
+        need_pn_branch = self.cfg_type == "condition_weighted" and mask_cfg_enabled
+        need_nn_branch = self.cfg_type == "progressive" and mask_cfg_enabled
+
         neg_prompt_embeds, neg_prompt_embeds_mask = None, None
-        mask_null_prompt_embeds, mask_null_prompt_embeds_mask = None, None
+        pos_null_mask_prompt_embeds, pos_null_mask_prompt_embeds_mask = None, None
+        neg_null_mask_prompt_embeds, neg_null_mask_prompt_embeds_mask = None, None
         null_dit_conditions = None
-        if text_cfg_enabled or mask_cfg_enabled:
+        if need_nm_branch or need_nn_branch:
             negative_prompt = preprocessed_data.negative_prompt
             neg_prompt_embeds, neg_prompt_embeds_mask = self.encode_prompt(
                 negative_prompt, preprocessed_data.vlm_conditions
@@ -443,9 +462,14 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 preprocessed_data.vlm_conditions,
                 preprocessed_data.dit_conditions,
             )
-            mask_null_prompt_embeds, mask_null_prompt_embeds_mask = self.encode_prompt(
-                negative_prompt, null_vlm_conditions
-            )
+            if need_pn_branch:
+                pos_null_mask_prompt_embeds, pos_null_mask_prompt_embeds_mask = self.encode_prompt(
+                    prompt, null_vlm_conditions
+                )
+            if need_nn_branch:
+                neg_null_mask_prompt_embeds, neg_null_mask_prompt_embeds_mask = self.encode_prompt(
+                    preprocessed_data.negative_prompt, null_vlm_conditions
+                )
 
         image_shapes = []
         dit_conditions = preprocessed_data.dit_conditions
@@ -486,9 +510,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         mask_null_image_shapes = None
         if null_conds is not None:
-            mask_null_image_shapes = [
-                (1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size)
-            ]
+            mask_null_image_shapes = [(1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size)]
             mask_null_image_shapes.extend(
                 [(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in null_conds]
             )
@@ -514,6 +536,36 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             edge_latents, edge_latents.shape[0], edge_latents.shape[1], edge_latents.shape[-2], edge_latents.shape[-1]
         )
 
+        cfg_branches = {
+            "pm": QwenMaskFlowCFGBranch(
+                prompt_embeds=prompt_embeds,
+                prompt_embeds_mask=prompt_embeds_mask,
+                conditions=cond_latents,
+                image_shapes=image_shapes,
+            )
+        }
+        if need_nm_branch:
+            cfg_branches["nm"] = QwenMaskFlowCFGBranch(
+                prompt_embeds=neg_prompt_embeds,
+                prompt_embeds_mask=neg_prompt_embeds_mask,
+                conditions=cond_latents,
+                image_shapes=image_shapes,
+            )
+        if need_pn_branch:
+            cfg_branches["pn"] = QwenMaskFlowCFGBranch(
+                prompt_embeds=pos_null_mask_prompt_embeds,
+                prompt_embeds_mask=pos_null_mask_prompt_embeds_mask,
+                conditions=mask_null_cond_latents,
+                image_shapes=mask_null_image_shapes,
+            )
+        if need_nn_branch:
+            cfg_branches["nn"] = QwenMaskFlowCFGBranch(
+                prompt_embeds=neg_null_mask_prompt_embeds,
+                prompt_embeds_mask=neg_null_mask_prompt_embeds_mask,
+                conditions=mask_null_cond_latents,
+                image_shapes=mask_null_image_shapes,
+            )
+
         return QwenMaskFlowForwardOutput(
             prompt_embeds=prompt_embeds,
             prompt_embeds_mask=prompt_embeds_mask,
@@ -526,10 +578,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             edge_latents=edge_latents,
             negative_prompt_embeds=neg_prompt_embeds,
             negative_prompt_embeds_mask=neg_prompt_embeds_mask,
-            mask_null_prompt_embeds=mask_null_prompt_embeds,
-            mask_null_prompt_embeds_mask=mask_null_prompt_embeds_mask,
-            mask_null_conditions=mask_null_cond_latents,
-            mask_null_image_shapes=mask_null_image_shapes,
+            cfg_branches=cfg_branches,
         )
 
     def compute_loss(
@@ -557,9 +606,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         """
         loss_dict = {}
         if loss_weights is not None:
-            # ground_truths = loss_weights * ground_truths
+            # no use
             loss_dict["loss_weights"] = loss_weights.mean()
-
 
         loss_field = F.mse_loss(predictions.float(), ground_truths.float(), reduction="none")
         loss = None
@@ -609,16 +657,85 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         )
         return loss
 
+    def denoise_cfg_branch(
+        self,
+        branch: QwenMaskFlowCFGBranch,
+        xt: torch.Tensor,
+        timestep: torch.Tensor,
+    ) -> torch.Tensor:
+        hidden_states = torch.cat([xt] + branch.conditions, dim=1)
+        return self.denoise(
+            hidden_states=hidden_states,
+            timesteps=timestep,
+            prompt_embeds=branch.prompt_embeds,
+            prompt_embeds_mask=branch.prompt_embeds_mask,
+            img_shapes=branch.image_shapes,
+            img_seq_len=xt.shape[1],
+        )
+
+    @staticmethod
+    def rescale_cfg_prediction(cfg_pred: torch.Tensor, pos_pred: torch.Tensor) -> torch.Tensor:
+        pos_norm = torch.norm(pos_pred, dim=-1, keepdim=True)
+        cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
+        return (pos_norm / cfg_norm) * cfg_pred
+
+    def combine_cfg_predictions(
+        self,
+        predictions: dict[str, torch.Tensor],
+        text_cfg_scale: float,
+        mask_cfg_scale: float,
+        mask_latents: torch.Tensor,
+    ) -> torch.Tensor:
+        pos_pred = predictions["pm"]
+        text_cfg_enabled = text_cfg_scale > 1.0
+        mask_cfg_enabled = mask_cfg_scale > 1.0
+        if not text_cfg_enabled and not mask_cfg_enabled:
+            return pos_pred
+
+        if self.cfg_type == "progressive":
+            null_text_mask_pred = predictions["nm"]
+            if mask_cfg_enabled:
+                null_text_null_mask_pred = predictions["nn"]
+                mask_residual = null_text_mask_pred - null_text_null_mask_pred
+                if self.enable_mask_cfg_gating:
+                    mask_residual = mask_latents * mask_residual
+                text_residual = pos_pred - null_text_mask_pred
+                cfg_pred = (
+                    null_text_null_mask_pred
+                    + mask_cfg_scale * mask_residual
+                    + text_cfg_scale * text_residual
+                )
+            else:
+                cfg_pred = null_text_mask_pred + text_cfg_scale * (pos_pred - null_text_mask_pred)
+            return self.rescale_cfg_prediction(cfg_pred, pos_pred)
+
+        text_cfg_pred = pos_pred
+        if text_cfg_enabled:
+            null_text_mask_pred = predictions["nm"]
+            text_cfg_pred = pos_pred + (text_cfg_scale - 1.0) * (pos_pred - null_text_mask_pred)
+
+        mask_cfg_pred = pos_pred
+        if mask_cfg_enabled:
+            pos_prompt_null_mask_pred = predictions["pn"]
+            mask_residual = pos_pred - pos_prompt_null_mask_pred
+            if self.enable_mask_cfg_gating:
+                mask_residual = mask_latents * mask_residual
+            mask_cfg_pred = pos_pred + (mask_cfg_scale - 1.0) * mask_residual
+
+        text_cfg_pred = self.rescale_cfg_prediction(text_cfg_pred, pos_pred)
+        mask_cfg_pred = self.rescale_cfg_prediction(mask_cfg_pred, pos_pred)
+        return 0.5 * (text_cfg_pred + mask_cfg_pred)
+
     @torch.inference_mode()
     def eval_step(
         self,
         batch,
         num_inference_steps: int = 50,
-        cfg_scale: float = 4.0,
-        mask_cfg_scale: float = 4.0,
+        text_cfg_scale: float = 1.0,
+        mask_cfg_scale: float = 1.0,
     ) -> list[torch.Tensor]:
         preprocessed_data = self.preprocess_inputs(batch)
-        model_inputs = self.prepare_eval_inputs(preprocessed_data, cfg_scale, mask_cfg_scale)
+        model_inputs = self.prepare_eval_inputs(preprocessed_data, text_cfg_scale, mask_cfg_scale)
         xt = model_inputs.noise
         mask = preprocessed_data.mask
         edge = preprocessed_data.edge
@@ -638,63 +755,24 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 curr_sigma = curr_sigma.to(xt.device)
                 next_sigma = next_sigma.to(xt.device)
                 d_sigma_dt = d_sigma_dt.to(xt.device)
-                hidden_states = torch.cat([xt] + [c for c in model_inputs.conditions], dim=1)
-                timestep = t.expand(hidden_states.shape[0]).to(device=self.device, dtype=self.dtype)
-
-                pos_pred = self.denoise(
-                    hidden_states=hidden_states,
-                    timesteps=timestep,
-                    prompt_embeds=model_inputs.prompt_embeds,
-                    prompt_embeds_mask=model_inputs.prompt_embeds_mask,
-                    img_shapes=model_inputs.image_shapes,
-                    img_seq_len=xt.shape[1],
-                )
-
-                text_cfg_enabled = cfg_scale != 1.0
-                mask_cfg_enabled = mask_cfg_scale != 1.0
-                if text_cfg_enabled or mask_cfg_enabled:
-                    null_text_mask_pred = self.denoise(
-                        hidden_states=hidden_states,
-                        timesteps=timestep,
-                        prompt_embeds=model_inputs.negative_prompt_embeds,
-                        prompt_embeds_mask=model_inputs.negative_prompt_embeds_mask,
-                        img_shapes=model_inputs.image_shapes,
-                        img_seq_len=xt.shape[1],
-                    )
-
+                timestep = t.expand(xt.shape[0]).to(device=self.device, dtype=self.dtype)
+                cfg_branches = model_inputs.cfg_branches
+                text_cfg_enabled = text_cfg_scale > 1.0
+                mask_cfg_enabled = mask_cfg_scale > 1.0
+                predictions = {"pm": self.denoise_cfg_branch(cfg_branches["pm"], xt, timestep)}
+                if text_cfg_enabled or (self.cfg_type == "progressive" and mask_cfg_enabled):
+                    predictions["nm"] = self.denoise_cfg_branch(cfg_branches["nm"], xt, timestep)
                 if mask_cfg_enabled:
-                    mask_null_hidden_states = torch.cat(
-                        [xt] + [c for c in model_inputs.mask_null_conditions], dim=1
+                    null_mask_branch = "nn" if self.cfg_type == "progressive" else "pn"
+                    predictions[null_mask_branch] = self.denoise_cfg_branch(
+                        cfg_branches[null_mask_branch], xt, timestep
                     )
-                    null_text_null_mask_pred = self.denoise(
-                        hidden_states=mask_null_hidden_states,
-                        timesteps=timestep,
-                        prompt_embeds=model_inputs.mask_null_prompt_embeds,
-                        prompt_embeds_mask=model_inputs.mask_null_prompt_embeds_mask,
-                        img_shapes=model_inputs.mask_null_image_shapes,
-                        img_seq_len=xt.shape[1],
-                    )
-                    mask_residual = null_text_mask_pred - null_text_null_mask_pred
-                    if self.enable_mask_cfg_gating:
-                        mask_residual = mask_latents * mask_residual
-                    text_residual = pos_pred - null_text_mask_pred
-                    cfg_pred = (
-                        null_text_null_mask_pred
-                        + mask_cfg_scale * mask_residual
-                        + cfg_scale * text_residual
-                    )
-                elif text_cfg_enabled:
-                    # Preserve the original two-branch text CFG path exactly when mask CFG is disabled.
-                    cfg_pred = null_text_mask_pred + cfg_scale * (pos_pred - null_text_mask_pred)
-                else:
-                    cfg_pred = pos_pred
-
-                if text_cfg_enabled or mask_cfg_enabled:
-                    pred_norm = torch.norm(pos_pred, dim=-1, keepdim=True)
-                    cfg_norm = torch.norm(cfg_pred, dim=-1, keepdim=True)
-                    pred = (pred_norm / cfg_norm) * cfg_pred
-                else:
-                    pred = pos_pred
+                pred = self.combine_cfg_predictions(
+                    predictions,
+                    text_cfg_scale,
+                    mask_cfg_scale,
+                    mask_latents,
+                )
 
                 if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() <= self.poisson_steps[1]:
                     # Predict clean endpoint

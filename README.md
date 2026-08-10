@@ -111,7 +111,8 @@ Boolean options accept `true`/`false`, `1`/`0`, `yes`/`no`, `y`/`n`, or `on`/`of
 | `--dtype` | `bf16` | Compute dtype: `bf16`, `fp16`, or `fp32` and their long-form aliases. |
 | `--seed` | `42` | Random seed for reproducible inference. |
 | `--num-inference-steps` | `50` | Number of denoising steps. |
-| `--cfg-scale` | `1.0` | Classifier-free guidance scale. |
+| `--text-cfg-scale` | `1.0` | Text classifier-free guidance scale. |
+| `--mask-cfg-scale` | `1.0` | Mask classifier-free guidance scale. |
 | `--mask-threshold` | `0.5` | Threshold used to binarize the mask; use a negative value to keep a soft mask. |
 | `--save-debug` | off | Also save intermediate mask, edge, and output tensors beside the result. |
 
@@ -124,6 +125,9 @@ Boolean options accept `true`/`false`, `1`/`0`, `yes`/`no`, `y`/`n`, or `on`/`of
 | `--mask-blur-sigma` | `25` | Gaussian sigma used for mask smoothing. |
 | `--mask-edge-width` | `50` | Width of the mask boundary region. |
 | `--enable-vae-mask-encoding` | `true` | Inject the mask during VAE encoding. |
+| `--cfg-type` | `condition_weighted` | Mask CFG formulation: `progressive` or `condition_weighted`. |
+| `--mask-cfg-null-type` | `full_one` | Null-mask representation: `full_one` or `null`. |
+| `--enable-mask-cfg-gating` | `false` | Gate the mask CFG residual with mask latents. |
 | `--enable-masked-loss` | `true` | Enable the mask-aware objective setting used by the pipeline. |
 | `--enable-pixel-blend` | `true` | Blend preserved pixels directly from the source image. |
 | `--enable-local-denoise-infer` | `false` | Enable local denoising during inference. |

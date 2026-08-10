@@ -12,6 +12,8 @@ mask_loss_weight: 1.0
 edge_loss_weight: 0.0
 
 enable_vae_mask_encoding: true
+
+cfg_type: condition_weighted  # progressive | condition_weighted
 mask_cfg_null_type: "null"
 enable_mask_cfg_gating: false
 

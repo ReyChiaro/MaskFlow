@@ -17,10 +17,12 @@ evaluation_dir: ${project.evaluation_dir}
 log_dir: ${project.log_dir}
 resume_from: ""
 
-cfg_scale: 4.0
-cfg_dropout: 0.05
+text_cfg_scale: 4.0
+text_cfg_dropout: 0.05
 mask_cfg_scale: 4.0
 mask_cfg_dropout: 0.05
+cfg_type: ${pipeline.cfg_type}  # progressive | condition_weighted
+
 max_grad_norm: 1.0
 max_training_steps: 5000
 save_steps: 1000
