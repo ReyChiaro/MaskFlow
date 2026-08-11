@@ -163,7 +163,7 @@ class BasePipeline:
             #     else:
             #         module_configs.append((module_name, module, configs))
 
-            for module_configs in self._fsdp_module_configs:
+            for module_configs in self.fsdp_module_configs:
                 # module_name = module_configs["module_name"]
                 module = module_configs["module"]
                 configs = module_configs["configs"]
