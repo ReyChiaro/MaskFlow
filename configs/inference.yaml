@@ -3,11 +3,29 @@ defaults:
   - adapter: lora
   - _self_
 
+input:
+  source: ???
+  mask: ???  # White pixels mark the edit region.
+  prompt: ???
+  negative_prompt: ""
 
-timestamp: ${now:%Y%m%d-%H%M%S}
-resume_from: ""
-safetensors_dir: ""
+checkpoint:
+  path: ???  # Training export directory: .../lora_adapter
+  adapter_name: ${adapter.adapter_name}
+
+runtime:
+  device: cuda
+  dtype: bfloat16
+  seed: 42
+  num_inference_steps: 50
+  text_cfg_scale: 4.0
+  mask_cfg_scale: 4.0
+
+output:
+  path: outputs/inference/${now:%Y%m%d-%H%M%S}/result.png
 
 hydra:
   run:
-    dir: outputs/inference/${timestamp}/hydra-configs
+    dir: outputs/inference/${now:%Y%m%d-%H%M%S}/hydra
+  job:
+    chdir: false
