@@ -1,0 +1,66 @@
+input:
+  source: ???
+  mask: ???  # White pixels mark the edit region.
+  prompt: ???
+  negative_prompt: ""
+
+checkpoint:
+  path: ???  # Training export directory: .../lora_adapter
+  adapter_name: maskflow
+
+runtime:
+  device: cuda
+  dtype: bfloat16
+  seed: 42
+  num_inference_steps: 50
+  text_cfg_scale: 4.0
+  mask_cfg_scale: 4.0
+
+output:
+  path: outputs/inference/${now:%Y%m%d-%H%M%S}/result.png
+
+pipeline:
+  _target_: pipelines.qwenimage.qwenimage_mask_flow.QwenImageMaskFlow
+  _recursive_: true
+  pretrained_model: Qwen/Qwen-Image-Edit-2511
+
+  mask_dilation_kernel: 25
+  mask_blur_kernel: 25
+  mask_blur_sigma: 25.0
+
+  cfg_type: condition_weighted
+  mask_cfg_null_type: "null"
+  enable_mask_cfg_gating: false
+
+  enable_local_denoise_infer: false
+  local_denoise_steps: [0.0, 1.0]
+  enable_pixel_blend: false
+
+  enable_poisson_infer: true
+  poisson_steps: [0.0, 1.0]
+  poisson_lambda_e: 1
+  poisson_lambda_s: 1
+  poisson_num_iter: 50
+  poisson_momentum: 0.1
+
+  scheduler:
+    _target_: schedulers.MaskFlowScheduler
+    weighting_scheme: logit_normal
+    logit_normal_mean: 0.0
+    logit_normal_std: 1.0
+    mode_scale: 1.29
+    base_image_seq_len: 256
+    base_shift: 0.5
+    max_image_seq_len: 8192
+    max_shift: 0.9
+    shift: 1.0
+    shift_power: 1
+    time_shift_type: exponential
+    use_dynamic_shifting: true
+    unmask_with: noisy_source
+
+hydra:
+  run:
+    dir: outputs/inference/${now:%Y%m%d-%H%M%S}/hydra
+  job:
+    chdir: false
