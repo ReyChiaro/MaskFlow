@@ -1,5 +1,5 @@
 defaults:
-  - evalset: mask_edit
+  - evalset: mask_edit_multi
   - pipeline: qwenimage_mask_flow
   - project: evaluation
   - adapter: lora

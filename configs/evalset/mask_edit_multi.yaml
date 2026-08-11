@@ -1,0 +1,29 @@
+_target_: torch.utils.data.ConcatDataset
+
+datasets:
+  - _target_: data_module.mask_edit_dataset.MaskEditDataset
+    image_root: dataset/MaskEdit/scene
+    data_file: dataset/MaskEdit/scene/runtime_testset.jsonl
+    load_start: 0.0
+    load_end: 1.0
+    divisible_by: 16
+    enable_prompt_truncation: false
+    replace_prompt_placeholder_with: "the masked area in the image 2"
+
+  - _target_: data_module.mask_edit_dataset.MaskEditDataset
+    image_root: dataset/MaskEdit/infographics_en
+    data_file: dataset/MaskEdit/infographics_en/runtime_testset.jsonl
+    load_start: 0.0
+    load_end: 1.0
+    divisible_by: 16
+    enable_prompt_truncation: false
+    replace_prompt_placeholder_with: "the masked area in the image 2"
+
+  - _target_: data_module.mask_edit_dataset.MaskEditDataset
+    image_root: dataset/MaskEdit/infographics_cn
+    data_file: dataset/MaskEdit/infographics_cn/runtime_testset.jsonl
+    load_start: 0.0
+    load_end: 1.0
+    divisible_by: 16
+    enable_prompt_truncation: false
+    replace_prompt_placeholder_with: "the masked area in the image 2"
