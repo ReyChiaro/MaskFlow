@@ -30,9 +30,11 @@ scripts/
 viewer/
 submissions/
 maskflow_*/
+qweninpaint/
 .env
 
 *.log
+*.typ
 *.tar
 *.tar.gz
 *.safetensors
