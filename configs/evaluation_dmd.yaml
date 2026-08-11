@@ -1,0 +1,27 @@
+defaults:
+  - evalset: mask_edit_multi
+  - pipeline: qwenimage_mask_flow
+  - project: evaluation
+  - adapter: dmd_lora
+  - _self_
+
+pipe_configs: ${pipeline}
+eval_data_configs: ${evalset}
+lora_configs: ${adapter}
+
+base_seed: 42
+sft_lora_path: ???
+sft_lora_scale: 1.0
+sft_adapter_name: sft_merge
+resume_from: null  # student_lora directory exported by DMDTrainer
+
+# CFG has already been baked into the Student.
+text_cfg_scale: 1.0
+mask_cfg_scale: 1.0
+num_inference_steps: 8
+
+eval_with_position_prompt: false
+
+hydra:
+  run:
+    dir: ${project.output_dir}/hydra-configs

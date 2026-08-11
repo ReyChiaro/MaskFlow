@@ -43,18 +43,23 @@ class QwenImageEditPlus(BasePipeline):
             .to(self.device)
             .requires_grad_(False)
         )
-        self.transformer = (
-            QwenImageTransformer2DModel.from_pretrained(
-                self.pretrained_model, subfolder="transformer", torch_dtype=self.dtype
-            )
-            .to(self.device)
-            .requires_grad_(False)
-        )
+        self.transformer = self.load_transformer()
         self.text_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             self.pretrained_model, vae=None, transformer=None, torch_dtype=self.dtype
         ).to(self.device)
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.image_processor = self.text_pipeline.image_processor
+
+    def load_transformer(self) -> QwenImageTransformer2DModel:
+        return (
+            QwenImageTransformer2DModel.from_pretrained(
+                self.pretrained_model,
+                subfolder="transformer",
+                torch_dtype=self.dtype,
+            )
+            .to(self.device)
+            .requires_grad_(False)
+        )
 
     @property
     def vae_scale_factor(self) -> int:
@@ -290,8 +295,30 @@ class QwenImageEditPlus(BasePipeline):
         img_seq_len: int,
         **kwargs,
     ) -> torch.Tensor:
+        return self.denoise_with_transformer(
+            self.transformer,
+            hidden_states,
+            timesteps,
+            prompt_embeds,
+            prompt_embeds_mask,
+            img_shapes,
+            img_seq_len,
+            **kwargs,
+        )
+
+    def denoise_with_transformer(
+        self,
+        transformer: torch.nn.Module,
+        hidden_states: torch.Tensor,
+        timesteps: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        prompt_embeds_mask: torch.Tensor,
+        img_shapes: list[list[tuple[int]]],
+        img_seq_len: int,
+        **kwargs,
+    ) -> torch.Tensor:
         dtype = hidden_states.dtype
-        predictions: torch.Tensor = self.transformer(
+        predictions: torch.Tensor = transformer(
             hidden_states=hidden_states,
             timestep=timesteps,
             encoder_hidden_states=prompt_embeds,

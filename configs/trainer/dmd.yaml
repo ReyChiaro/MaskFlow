@@ -1,0 +1,68 @@
+_target_: trainer.dmd.DMDTrainer
+_recursive_: false
+
+pipe_configs: ${pipeline}
+optimizer_configs: ${optimizer}
+fake_optimizer_configs: ${optimizer}
+train_data_configs: ${trainset}
+eval_data_configs: ${evalset}
+lora_configs: ${adapter}
+lr_scheduler_configs: null
+
+# The same merged SFT endpoint initializes Teacher, Student and Fake. Override
+# this explicitly with null only when the base already contains MaskFlow SFT.
+sft_lora_path: ???
+sft_lora_scale: 1.0
+sft_adapter_name: ???
+
+# Teacher CFG is baked into the positive-condition Student branch.
+teacher_cfg_type: ${pipeline.cfg_type}  # progressive | condition_weighted
+teacher_cfg_mode: combined             # combined | text | mask | none
+teacher_text_cfg_scale: 4.0
+teacher_mask_cfg_scale: 1.0  # no use
+
+# DMD2 alternates one Student update with this many Fake score-model updates.
+fake_update_ratio: 5
+dmd_timestep_min: 0.02
+dmd_timestep_max: 0.98
+dmd_normalizer_min: 1.0e-3
+dmd_gradient_clip: 10.0
+dmd_mask_weight: 1.0
+dmd_background_weight: 0.1
+dmd_edge_weight: 0.0
+
+# Optional original MaskFlow SFT objective on the Student.
+mask_loss_weight: 0.0
+
+# Ordinary multi-step DMD samples an endpoint from the configured 8-step grid.
+# Set rollout_end_step_mode=last to always train on the complete trajectory.
+rollout_end_step_mode: random
+# full backpropagates through the simulated prefix; last_step is a memory-saving mode.
+student_gradient_mode: full
+poisson_in_dmd_score: true
+
+enable_save_optimizer: false
+base_seed: 42
+output_dir: ${project.output_dir}
+checkpoint_dir: ${project.checkpoint_dir}
+evaluation_dir: ${project.evaluation_dir}
+log_dir: ${project.log_dir}
+resume_from: ""
+
+text_cfg_dropout: 0.0
+max_grad_norm: 1.0
+max_training_steps: 5000
+save_steps: 2500
+eval_steps: 2500
+mixed_precision: bf16
+enable_gradient_checkpoint: true
+gradient_accumulation_steps: 1
+cudnn_deterministic: false
+cudnn_benchmark: true
+
+fsdp_strategy: full_shard
+
+batch_size_per_process: 1
+data_loader_workers: 8
+
+num_inference_steps: 8

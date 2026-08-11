@@ -99,15 +99,14 @@ class BasePipeline:
             self._fsdp_module_configs = []
             if self.fsdp_configs is not None:
                 module_configs = []
-                for module_name, configs in self.fsdp_configs.items():
+                for module_name, raw_configs in self.fsdp_configs.items():
                     module = get_nested_attr(self, module_name)
-                    # is_iterable = configs.pop("iterable", False)
-                    if isinstance(module, Iterable):
+                    configs = dict(raw_configs)
+                    is_iterable = configs.pop("iterable", isinstance(module, Iterable))
+                    if is_iterable:
                         for i, m in enumerate(module):
-                            # module_configs.extend([{"module": m, "configs": configs} for m in module])
                             module_configs.append({"name": f"{module_name}.{i}", "module": m, "configs": configs})
                     else:
-                        # module_configs.append({"module": module, "configs": configs})
                         module_configs.append({"name": module_name, "module": module, "configs": configs})
                 self._fsdp_module_configs = module_configs
         return self._fsdp_module_configs
@@ -179,6 +178,41 @@ class BasePipeline:
         else:
             logger.warning(f"Unsupported FSDPStrategy: {fsdp_strategy}.")
         return self
+
+    def setup_additional_transformer(
+        self,
+        transformer: torch.nn.Module,
+        fsdp_strategy: FSDPStrategy,
+        device: torch.device,
+        dtype: torch.dtype,
+    ):
+        r"""Apply the pipeline's transformer placement policy to another transformer."""
+        if FSDPStrategy.is_no_shard(fsdp_strategy):
+            transformer.to(device, dtype=dtype)
+            return transformer
+
+        if not FSDPStrategy.is_full_shard(fsdp_strategy):
+            logger.warning(f"Unsupported FSDPStrategy: {fsdp_strategy}.")
+            return transformer
+
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=dtype,
+            reduce_dtype=torch.float32,
+            cast_forward_inputs=False,
+        )
+        mesh = parallel_handler.get_device_mesh(fsdp_strategy)
+        for module_name, raw_configs in self.fsdp_configs.items():
+            if module_name != "transformer" and not module_name.startswith("transformer."):
+                continue
+
+            configs = dict(raw_configs)
+            is_iterable = configs.pop("iterable", False)
+            relative_name = module_name.removeprefix("transformer.")
+            module = transformer if module_name == "transformer" else get_nested_attr(transformer, relative_name)
+            modules = module if is_iterable else [module]
+            for submodule in modules:
+                fully_shard(submodule, mesh=mesh, mp_policy=mp_policy, **configs)
+        return transformer
 
     def forward_step(self, batch, **kwargs):
         pass
