@@ -8,7 +8,7 @@ datasets:
     load_end: 1.0
     divisible_by: 16
     enable_prompt_truncation: false
-    replace_prompt_placeholder_with: "the masked area in the image 2"
+    replace_prompt_placeholder_with: "the object in the masked area"
 
   - _target_: data_module.mask_edit_dataset.MaskEditDataset
     image_root: dataset/MaskEdit/infographics_en
@@ -17,7 +17,7 @@ datasets:
     load_end: 1.0
     divisible_by: 16
     enable_prompt_truncation: false
-    replace_prompt_placeholder_with: "the masked area in the image 2"
+    replace_prompt_placeholder_with: "the object in the masked area"
 
   - _target_: data_module.mask_edit_dataset.MaskEditDataset
     image_root: dataset/MaskEdit/infographics_cn
@@ -26,4 +26,4 @@ datasets:
     load_end: 1.0
     divisible_by: 16
     enable_prompt_truncation: false
-    replace_prompt_placeholder_with: "the masked area in the image 2"
+    replace_prompt_placeholder_with: "the object in the masked area"

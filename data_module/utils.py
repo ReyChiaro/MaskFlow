@@ -7,7 +7,7 @@ import torchvision.transforms.functional as T
 from loguru import logger
 
 ASPECT_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"]
-MAX_RESOLUTION = 1024 * 1024
+MAX_RESOLUTION = 1254 * 1254
 MAX_CONDITION_RESOLUTION = 384 * 384
 DIVISIBLE_BY = 16
 
