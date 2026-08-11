@@ -6,4 +6,4 @@ load_start: 0.0
 load_end: 1.0
 divisible_by: 16
 enable_prompt_truncation: false
-replace_prompt_placeholder_with: "the masked area in the image 2"
+replace_prompt_placeholder_with: "the object in the masked area"
