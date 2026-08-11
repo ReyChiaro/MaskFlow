@@ -15,6 +15,7 @@ from torchvision.utils import save_image
 from tqdm import tqdm
 
 from pipelines.base_pipeline import BasePipeline
+from trainer.lora_utils import merge_lora
 
 
 def _select(cfgs: OmegaConf, key: str, default: Any = None) -> Any:
@@ -39,6 +40,15 @@ def _load_lora_adapter(pipe: BasePipeline, cfgs: OmegaConf):
         +lora_safetensors_dir (str): If a DCP/FSDP checkpoint is given,
             it will be converted into safetensors for convenient reuse.
     """
+    sft_lora_path = _select(cfgs, "sft_lora_path")
+    if sft_lora_path:
+        merge_lora(
+            pipe.transformer,
+            sft_lora_path,
+            _select(cfgs, "sft_adapter_name", "sft_merge"),
+            _select(cfgs, "sft_lora_scale", 1.0),
+        )
+
     resume_from = _select(cfgs, "resume_from")
     if not resume_from or not Path(resume_from).exists():
         if resume_from:

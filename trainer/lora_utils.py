@@ -1,0 +1,98 @@
+import json
+
+import torch
+from loguru import logger
+from omegaconf import OmegaConf
+from peft import LoraConfig
+from peft.utils import get_peft_model_state_dict
+from safetensors.torch import save_file
+
+from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
+from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+
+
+def add_trainable_lora(
+    transformer: torch.nn.Module,
+    cfgs: OmegaConf,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> list[torch.nn.Parameter]:
+    lora_config = LoraConfig(
+        r=cfgs.r,
+        lora_alpha=cfgs.lora_alpha,
+        lora_dropout=cfgs.lora_dropout,
+        bias="none",
+        target_modules=list(cfgs.target_modules),
+    )
+
+    transformer.requires_grad_(False)
+    transformer.add_adapter(lora_config, adapter_name=cfgs.adapter_name)
+    transformer.set_adapter(cfgs.adapter_name)
+
+    params = []
+    for name, param in transformer.named_parameters():
+        if cfgs.adapter_name in name and "lora_" in name:
+            param.data = param.to(device=device, dtype=dtype).data
+            if param.grad is not None:
+                param.grad = param.grad.to(device=device, dtype=dtype)
+            param.requires_grad_(True)
+            params.append(param)
+
+    logger.info(f"Added trainable LoRA adapter '{cfgs.adapter_name}'.")
+    return params
+
+
+def merge_lora(
+    transformer: torch.nn.Module,
+    lora_path: str,
+    adapter_name: str,
+    lora_scale: float = 1.0,
+):
+    transformer.load_lora_adapter(lora_path, adapter_name=adapter_name, prefix=None)
+    transformer.set_adapter(adapter_name)
+    transformer.fuse_lora(
+        lora_scale=lora_scale,
+        safe_fusing=True,
+        adapter_names=[adapter_name],
+    )
+    transformer.unload_lora()
+    logger.info(f"Merged LoRA '{lora_path}' into transformer.")
+
+
+def save_lora_adapter(
+    transformer: torch.nn.Module,
+    cfgs: OmegaConf,
+    adapter_dir,
+    is_main_process: bool,
+):
+    full_state_dict = get_model_state_dict(
+        transformer,
+        options=StateDictOptions(
+            full_state_dict=True,
+            cpu_offload=True,
+            ignore_frozen_params=True,
+        ),
+    )
+
+    if not is_main_process:
+        return
+
+    adapter_dir.mkdir(exist_ok=True, parents=True)
+    lora_state_dict = get_peft_model_state_dict(
+        transformer,
+        state_dict=full_state_dict,
+        adapter_name=cfgs.adapter_name,
+    )
+    if not lora_state_dict:
+        raise RuntimeError(f"No LoRA weights found for adapter '{cfgs.adapter_name}'.")
+
+    metadata = {"format": "pt"}
+    lora_adapter_metadata = transformer.peft_config[cfgs.adapter_name].to_dict()
+    for key, value in lora_adapter_metadata.items():
+        if isinstance(value, set):
+            lora_adapter_metadata[key] = list(value)
+    metadata[LORA_ADAPTER_METADATA_KEY] = json.dumps(lora_adapter_metadata, indent=2, sort_keys=True)
+
+    save_path = adapter_dir / LORA_WEIGHT_NAME_SAFE
+    save_file(lora_state_dict, save_path, metadata=metadata)
+    logger.info(f"LoRA safetensors saved to {save_path}.")

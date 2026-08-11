@@ -10,6 +10,9 @@ input:
   negative_prompt: ""
 
 checkpoint:
+  sft_path: null  # Optional SFT LoRA fused before the final adapter.
+  sft_scale: 1.0
+  sft_adapter_name: null
   path: ???  # Training export directory: .../lora_adapter
   adapter_name: ${adapter.adapter_name}
 
