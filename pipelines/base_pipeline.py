@@ -148,6 +148,8 @@ class BasePipeline:
 
         elif FSDPStrategy.is_full_shard(fsdp_strategy):
             assert self.fsdp_configs is not None, f"FSDPStrategy is {fsdp_strategy}, but fsdp_configs are not given."
+            if "transformer" in self.fsdp_configs:
+                self._register_fsdp_view_output_clone(self.transformer)
             # module_configs = []
             # for module_name, raw_configs in self._fsdp_module_configs:
             #     configs: dict[str, Any] = copy.deepcopy(raw_configs)
@@ -179,6 +181,24 @@ class BasePipeline:
             logger.warning(f"Unsupported FSDPStrategy: {fsdp_strategy}.")
         return self
 
+    @staticmethod
+    def _clone_view_output(module, args, output):
+        r"""Give FSDP2 an owning tensor when a model returns a tensor view."""
+        if isinstance(output, torch.Tensor):
+            return output.clone() if output._base is not None else output
+        if isinstance(output, tuple):
+            return tuple(
+                item.clone() if isinstance(item, torch.Tensor) and item._base is not None else item
+                for item in output
+            )
+        return output
+
+    def _register_fsdp_view_output_clone(self, transformer: torch.nn.Module):
+        if hasattr(transformer, "_maskflow_fsdp_view_output_clone_handle"):
+            return
+        handle = transformer.register_forward_hook(self._clone_view_output)
+        transformer._maskflow_fsdp_view_output_clone_handle = handle
+
     def setup_additional_transformer(
         self,
         transformer: torch.nn.Module,
@@ -201,6 +221,8 @@ class BasePipeline:
             cast_forward_inputs=False,
         )
         mesh = parallel_handler.get_device_mesh(fsdp_strategy)
+        if "transformer" in self.fsdp_configs:
+            self._register_fsdp_view_output_clone(transformer)
         for module_name, raw_configs in self.fsdp_configs.items():
             if module_name != "transformer" and not module_name.startswith("transformer."):
                 continue
