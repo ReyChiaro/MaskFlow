@@ -110,6 +110,7 @@ class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
         mask: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
     ):
+        dtype = xt.dtype
         while sigma.ndim < xt.ndim:
             sigma = sigma.unsqueeze(-1)
-        return xt - sigma * v
+        return (xt.float() - sigma.float() * v.float()).to(dtype=dtype)
