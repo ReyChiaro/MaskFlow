@@ -45,7 +45,9 @@ const translations = {
     loadModel: "Load model & LoRA only",
     startGenerate: "Generate",
     preparingTask: "Preparing task",
-    progressHint: "The first run downloads and loads the model. Later runs reuse it.",
+    loadingModel: "Loading model",
+    loadingHint: "The first model load may take a while. Later runs reuse it.",
+    generationHint: "Generation progress follows the denoising steps.",
     editComplete: "Edit complete",
     saveResult: "Save result",
     resultAlt: "MaskFlow edit result",
@@ -120,7 +122,9 @@ const translations = {
     loadModel: "仅加载模型与 LoRA",
     startGenerate: "开始生成",
     preparingTask: "准备任务",
-    progressHint: "首次运行需要下载并加载模型，后续生成会直接复用。",
+    loadingModel: "正在加载模型",
+    loadingHint: "首次加载可能需要一些时间，后续生成会直接复用。",
+    generationHint: "生成进度与模型去噪步数同步。",
     editComplete: "编辑完成",
     saveResult: "保存结果",
     resultAlt: "MaskFlow 编辑结果",
@@ -501,13 +505,26 @@ function translateError(error) {
 
 function showProgress(data) {
   lastProgressData = data;
-  $("progressCard").hidden = false;
+  if (data.kind === "model" && data.status === "done") {
+    $("loadingCard").hidden = true;
+    $("progressCard").hidden = true;
+    return;
+  }
+  const isLoading = data.phase === "loading" || data.phase === undefined && data.progress < 40;
+  $("loadingCard").hidden = !isLoading;
+  $("progressCard").hidden = isLoading;
+  if (isLoading) {
+    $("loadingStage").textContent = data.status === "error"
+      ? translateError(data.error) || t("jobFailed")
+      : translateStage(data.stage);
+    return;
+  }
   $("progressStage").textContent = data.status === "error"
     ? translateError(data.error) || t("jobFailed")
     : translateStage(data.stage);
   $("progressValue").textContent = `${data.progress}%`;
   $("progressBar").style.width = `${data.progress}%`;
-  $("progressBar").classList.toggle("running", data.status !== "done" && data.status !== "error");
+  $("progressBar").classList.toggle("running", data.phase === "generating");
 }
 
 function pollJob(job, isInference) {

@@ -6,7 +6,7 @@ datasets:
     data_file: dataset/MaskEdit/scene/runtime_testset.jsonl
     load_start: 0.0
     load_end: 1.0
-    divisible_by: 16
+    divisible_by: 32
     enable_prompt_truncation: false
     replace_prompt_placeholder_with: "the masked area in the image 2"
 
@@ -15,7 +15,7 @@ datasets:
     data_file: dataset/MaskEdit/infographics_en/runtime_testset.jsonl
     load_start: 0.0
     load_end: 1.0
-    divisible_by: 16
+    divisible_by: 32
     enable_prompt_truncation: false
     replace_prompt_placeholder_with: "the masked area in the image 2"
 
@@ -24,6 +24,6 @@ datasets:
     data_file: dataset/MaskEdit/infographics_cn/runtime_testset.jsonl
     load_start: 0.0
     load_end: 1.0
-    divisible_by: 16
+    divisible_by: 32
     enable_prompt_truncation: false
     replace_prompt_placeholder_with: "the masked area in the image 2"

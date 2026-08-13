@@ -107,7 +107,13 @@ input:focus, textarea:focus, select:focus { border-color: #a37aba; box-shadow: 0
 .generate-button:disabled { opacity: .42; cursor: default; box-shadow: none; }
 .button-arrow { font-size: 20px; font-weight: 400; }
 
-.progress-card, .result-card { margin-top: 16px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: #fcf9fe; }
+.loading-card, .progress-card, .result-card { margin-top: 16px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: #fcf9fe; }
+.loading-card { display: flex; align-items: center; gap: 13px; }
+.loading-card[hidden] { display: none; }
+.loading-card strong { display: block; font-size: 12px; }
+.loading-card p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.loading-spinner { width: 25px; height: 25px; flex: 0 0 25px; border: 3px solid #e4d8ea; border-top-color: var(--purple); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .progress-copy { display: flex; justify-content: space-between; gap: 14px; font-size: 12px; }
 .progress-copy span { color: var(--purple); font-variant-numeric: tabular-nums; }
 .progress-track { height: 7px; margin-top: 10px; overflow: hidden; border-radius: 9px; background: #e9e0ee; }

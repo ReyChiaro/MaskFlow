@@ -27,7 +27,8 @@ class Job:
     kind: str
     status: str = "queued"
     stage: str = "等待处理"
-    progress: int = 4
+    phase: str = "loading"
+    progress: int = 0
     error: str | None = None
     output_path: Path | None = None
     created_at: float = field(default_factory=time.time)
@@ -38,6 +39,7 @@ class Job:
             "kind": self.kind,
             "status": self.status,
             "stage": self.stage,
+            "phase": self.phase,
             "progress": self.progress,
             "error": self.error,
         }
@@ -52,12 +54,21 @@ MODEL_LOCK = threading.Lock()
 MODEL_CACHE: dict[str, Any] = {"key": None, "pipeline": None, "label": None}
 
 
-def _set_job(job: Job, *, status: str | None = None, stage: str | None = None, progress: int | None = None):
+def _set_job(
+    job: Job,
+    *,
+    status: str | None = None,
+    stage: str | None = None,
+    phase: str | None = None,
+    progress: int | None = None,
+):
     with JOBS_LOCK:
         if status is not None:
             job.status = status
         if stage is not None:
             job.stage = stage
+        if phase is not None:
+            job.phase = phase
         if progress is not None:
             job.progress = progress
 
@@ -124,10 +135,10 @@ def _load_pipeline(settings: dict[str, Any], job: Job):
 
     cache_key = json.dumps(settings, sort_keys=True, ensure_ascii=False)
     if MODEL_CACHE["key"] == cache_key:
-        _set_job(job, stage="复用已加载模型", progress=32)
+        _set_job(job, stage="复用已加载模型")
         return MODEL_CACHE["pipeline"]
 
-    _set_job(job, stage="加载基础模型与 LoRA", progress=14)
+    _set_job(job, stage="加载基础模型与 LoRA")
     cfg = _build_config(settings)
     device = torch.device(cfg.runtime.device)
     dtype = getattr(torch, cfg.runtime.dtype)
@@ -144,19 +155,19 @@ def _load_pipeline(settings: dict[str, Any], job: Job):
         pipeline=pipeline,
         label=f"{settings['pretrained_model']} · {settings['dtype']}",
     )
-    _set_job(job, stage="模型已就绪", progress=36)
+    _set_job(job, stage="模型已就绪")
     return pipeline
 
 
 def _run_preload(job: Job, payload: dict[str, Any]) -> None:
     try:
-        _set_job(job, status="running", stage="准备模型", progress=8)
+        _set_job(job, status="running", stage="准备模型", phase="loading", progress=0)
         with MODEL_LOCK:
             _load_pipeline(_model_settings(payload.get("settings", {})), job)
-        _set_job(job, status="done", stage="模型已加载", progress=100)
+        _set_job(job, status="done", stage="模型已加载", phase="done", progress=100)
     except Exception as exc:
         job.error = str(exc)
-        _set_job(job, status="error", stage="加载失败", progress=100)
+        _set_job(job, status="error", stage="加载失败", phase="error")
 
 
 def _run_inference(job: Job, payload: dict[str, Any]) -> None:
@@ -175,7 +186,7 @@ def _run_inference(job: Job, payload: dict[str, Any]) -> None:
         _decode_image(payload["source"], source_path)
         _decode_image(payload["mask"], mask_path)
 
-        _set_job(job, status="running", stage="准备输入", progress=8)
+        _set_job(job, status="running", stage="准备输入", phase="loading", progress=0)
         with MODEL_LOCK:
             pipeline = _load_pipeline(settings, job)
             runtime = payload.get("runtime", {})
@@ -191,29 +202,36 @@ def _run_inference(job: Job, payload: dict[str, Any]) -> None:
                 "conditions": {"source": source, "mask": mask},
             }
 
-            _set_job(job, stage="MaskFlow 正在生成", progress=48)
+            total_steps = int(runtime.get("num_inference_steps", 50))
+            _set_job(
+                job,
+                stage=f"MaskFlow 正在生成 · 0/{total_steps}",
+                phase="generating",
+                progress=0,
+            )
             result = pipeline.eval_step(
                 batch=batch,
-                num_inference_steps=int(runtime.get("num_inference_steps", 50)),
+                num_inference_steps=total_steps,
                 text_cfg_scale=float(runtime.get("text_cfg_scale", 4.0)),
                 mask_cfg_scale=float(runtime.get("mask_cfg_scale", 1.0)),
                 progress_callback=lambda step, total: _set_job(
                     job,
                     stage=f"MaskFlow 正在生成 · {step}/{total}",
-                    progress=48 + int(44 * step / total),
+                    phase="generating",
+                    progress=int(100 * step / total),
                 ),
             )
-            _set_job(job, stage="保存结果", progress=94)
+            _set_job(job, stage="保存结果", phase="saving", progress=100)
             output = result["output"][0].float().cpu().clamp(0, 1)
             TF.to_pil_image(output).save(output_path)
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
 
         job.output_path = output_path
-        _set_job(job, status="done", stage="生成完成", progress=100)
+        _set_job(job, status="done", stage="生成完成", phase="done", progress=100)
     except Exception as exc:
         job.error = str(exc)
-        _set_job(job, status="error", stage="生成失败", progress=100)
+        _set_job(job, status="error", stage="生成失败", phase="error")
 
 
 class EditorHandler(BaseHTTPRequestHandler):
