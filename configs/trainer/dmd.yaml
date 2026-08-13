@@ -17,7 +17,7 @@ sft_adapter_name: maskflow
 
 # Teacher CFG is baked into the positive-condition Student branch.
 teacher_cfg_type: ${pipeline.cfg_type}  # progressive | condition_weighted
-teacher_cfg_mode: combined             # combined | text | mask | none
+teacher_cfg_mode: text             # combined | text | mask | none
 teacher_text_cfg_scale: 4.0
 teacher_mask_cfg_scale: 1.0  # no use
 
@@ -52,8 +52,8 @@ resume_from: ""
 text_cfg_dropout: 0.0
 max_grad_norm: 1.0
 max_training_steps: 100
-save_steps: 100
-eval_steps: 100
+save_steps: 50
+eval_steps: 50
 mixed_precision: bf16
 enable_gradient_checkpoint: true
 gradient_accumulation_steps: 1
@@ -65,4 +65,4 @@ fsdp_strategy: full_shard
 batch_size_per_process: 1
 data_loader_workers: 8
 
-num_inference_steps: 8
+num_inference_steps: 16
