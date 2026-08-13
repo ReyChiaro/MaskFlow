@@ -1,6 +1,6 @@
 import os
 import torch
-import torchvision.transforms.functional as T
+import torchvision.transforms.v2.functional as T
 
 from pathlib import Path
 from typing import Any
@@ -66,7 +66,7 @@ class MaskEditDataset(SchemaDataset):
                     c,
                     aspect_ratio,
                     divisible_by=self.divisible_by,
-                    interpolation=T.InterpolationMode.NEAREST if k == "mask" else T.InterpolationMode.BICUBIC,
+                    interpolation=T.InterpolationMode.NEAREST if k == "mask" else T.InterpolationMode.LANCZOS,
                 )
                 for k, c in conditions.items()
             }
