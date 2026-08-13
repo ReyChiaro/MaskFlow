@@ -88,7 +88,7 @@ uv run python inference.py \
   input.mask=/absolute/path/to/mask.png \
   'input.prompt=Replace the masked object with a red ceramic vase.' \
   checkpoint.sft_path=ReyChiaro/MaskFlow \
-  checkpoint.sft_weight_name=maskflow-SEC.safetensors \
+  checkpoint.sft_weight_name=maskflow-S.safetensors \
   runtime.num_inference_steps=50 \
   runtime.text_cfg_scale=4.0 \
   output.path=outputs/result.png
@@ -132,8 +132,8 @@ Inference uses [Hydra](https://hydra.cc/), so any field in [`configs/inference.y
 
 | Override | Default | Description |
 |---|---:|---|
-| `checkpoint.sft_path` | `null` | Local SFT LoRA path or Hugging Face repository ID |
-| `checkpoint.sft_weight_name` | `null` | SFT filename when loading from a multi-weight Hub repository |
+| `checkpoint.sft_path` | `ReyChiaro/MaskFlow` | Local SFT LoRA path or Hugging Face repository ID |
+| `checkpoint.sft_weight_name` | `maskflow-S.safetensors` | SFT filename when loading from a multi-weight Hub repository |
 | `checkpoint.dmd_path` | `null` | Local distilled LoRA path or Hugging Face repository ID |
 | `checkpoint.dmd_weight_name` | `null` | Distilled filename when loading from a multi-weight Hub repository |
 | `runtime.device` | `cuda` | Torch device used for inference |
@@ -141,6 +141,7 @@ Inference uses [Hydra](https://hydra.cc/), so any field in [`configs/inference.y
 | `runtime.seed` | `42` | Random seed |
 | `runtime.num_inference_steps` | `50` | Denoising steps; must match the selected distilled checkpoint |
 | `runtime.text_cfg_scale` | `4.0` | Text classifier-free guidance scale |
+| `pipeline.enable_pixel_blend` | `true` | Blend the unmasked pixels from the source image into the final result |
 | `output.path` | timestamped path | Output image path |
 
 The adapter names are fixed to `maskflow` for SFT and `dmd` for step distillation. If `checkpoint.dmd_path` is provided without `checkpoint.sft_path`, inference stops with an error instead of silently producing an incorrectly initialized result.

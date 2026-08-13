@@ -34,7 +34,7 @@ pipeline:
 
   enable_local_denoise_infer: false
   local_denoise_steps: [0.0, 1.0]
-  enable_pixel_blend: false
+  enable_pixel_blend: true
 
   enable_poisson_infer: true
   poisson_steps: [0.0, 1.0]

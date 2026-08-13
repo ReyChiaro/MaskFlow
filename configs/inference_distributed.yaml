@@ -10,8 +10,8 @@ dataset:
   negative_prompt_key: negative_prompt
 
 checkpoint:
-  sft_path: null
-  sft_weight_name: null  # Optional filename when sft_path is a Hugging Face repository ID.
+  sft_path: ReyChiaro/MaskFlow
+  sft_weight_name: maskflow-S.safetensors  # Filename when sft_path is a Hugging Face repository ID.
   sft_adapter_name: maskflow
   dmd_path: null
   dmd_weight_name: null  # Optional filename when dmd_path is a Hugging Face repository ID.

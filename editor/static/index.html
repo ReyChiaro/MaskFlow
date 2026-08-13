@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#7434b8" />
+    <meta name="description" content="A local mask-guided image editor for MaskFlow" />
+    <title>MaskFlow Editor</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="MaskFlow Editor home" data-i18n-aria="brandHome">
+        <span class="brand-mark">M</span>
+        <span><strong>MaskFlow</strong><small>Image Editor</small></span>
+      </a>
+      <div class="top-actions">
+        <div class="device-state" id="deviceState">
+          <span class="state-dot"></span><span data-i18n="checkingRuntime">Checking runtime</span>
+        </div>
+        <button class="language-toggle" id="languageToggle" type="button" aria-label="Switch to Chinese">中文</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="editor-panel panel" aria-labelledby="canvasTitle">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">01 · MASK</p>
+            <h1 id="canvasTitle" data-i18n="maskTitle">Paint the area you want to edit</h1>
+          </div>
+          <label class="upload-button" for="imageInput" data-i18n="uploadImage">Upload image</label>
+          <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+        </div>
+
+        <div class="toolbar" aria-label="Mask drawing tools" data-i18n-aria="maskTools">
+          <div class="tool-group segmented">
+            <button class="tool active" id="drawTool" type="button" aria-pressed="true" data-i18n="draw">Draw</button>
+            <button class="tool" id="eraseTool" type="button" aria-pressed="false" data-i18n="erase">Erase</button>
+          </div>
+          <label class="brush-control">
+            <span data-i18n="brush">Brush</span>
+            <input id="brushSize" type="range" min="4" max="160" value="48" />
+            <output id="brushValue">48 px</output>
+          </label>
+          <div class="tool-group toolbar-actions">
+            <button class="icon-button" id="undoButton" type="button" disabled>↶ <span data-i18n="undo">Undo</span></button>
+            <button class="icon-button" id="clearButton" type="button" disabled data-i18n="clear">Clear</button>
+            <button class="icon-button" id="saveMaskButton" type="button" disabled data-i18n="saveMask">Save mask</button>
+          </div>
+        </div>
+
+        <div class="canvas-shell" id="canvasShell">
+          <div class="empty-state" id="emptyState">
+            <span class="empty-orb">＋</span>
+            <h2 data-i18n="startUpload">Upload an image to begin</h2>
+            <p data-i18n="fileSupport">PNG, JPG, and WebP supported. White mask pixels define the edit area.</p>
+            <label class="upload-button primary" for="imageInput" data-i18n="chooseImage">Choose image</label>
+          </div>
+          <div class="canvas-stage" id="canvasStage" hidden>
+            <img id="sourceImage" alt="Source image to edit" data-i18n-alt="sourceAlt" draggable="false" />
+            <canvas id="drawCanvas" aria-label="Mask drawing canvas" data-i18n-aria="canvasAria"></canvas>
+            <div class="brush-cursor" id="brushCursor" aria-hidden="true"></div>
+          </div>
+        </div>
+        <p class="canvas-tip"><span class="tip-dot"></span><span data-i18n="canvasTip">The magenta overlay is the edit area. The mask keeps the source image dimensions.</span></p>
+      </section>
+
+      <aside class="control-panel panel" aria-labelledby="promptTitle">
+        <div class="panel-heading compact">
+          <div>
+            <p class="eyebrow">02 · GENERATE</p>
+            <h2 id="promptTitle" data-i18n="generateTitle">Describe the result you want</h2>
+          </div>
+        </div>
+
+        <form id="generateForm">
+          <label class="field prompt-field">
+            <span>Prompt</span>
+            <textarea id="prompt" rows="4" placeholder="For example: Replace the selected area with a red ceramic vase." data-i18n-placeholder="promptPlaceholder" required></textarea>
+          </label>
+          <label class="field">
+            <span>Negative prompt <small data-i18n="optional">Optional</small></span>
+            <textarea id="negativePrompt" rows="2" placeholder="Content you do not want to appear" data-i18n-placeholder="negativePlaceholder"></textarea>
+          </label>
+
+          <div class="runtime-grid">
+            <label class="field">
+              <span data-i18n="steps">Inference steps</span>
+              <input id="steps" type="number" min="1" max="200" value="50" />
+            </label>
+            <label class="field">
+              <span>Text CFG</span>
+              <input id="textCfg" type="number" min="1" max="20" step="0.1" value="4.0" />
+            </label>
+            <label class="field">
+              <span data-i18n="seed">Seed</span>
+              <input id="seed" type="number" value="42" />
+            </label>
+          </div>
+
+          <details class="advanced">
+            <summary><span data-i18n="advanced">Advanced settings</span><small data-i18n="advancedCaption">Model, LoRA &amp; pipeline</small></summary>
+            <div class="advanced-body">
+              <div class="section-label" data-i18n="modelLora">Model &amp; LoRA</div>
+              <label class="field">
+                <span data-i18n="baseModel">Base model</span>
+                <input id="pretrainedModel" value="Qwen/Qwen-Image-Edit-2511" />
+              </label>
+              <div class="runtime-grid two">
+                <label class="field">
+                  <span data-i18n="device">Device</span>
+                  <select id="device"><option value="cuda">CUDA</option><option value="cpu">CPU</option></select>
+                </label>
+                <label class="field">
+                  <span data-i18n="precision">Precision</span>
+                  <select id="dtype"><option value="bfloat16">bfloat16</option><option value="float16">float16</option><option value="float32">float32</option></select>
+                </label>
+              </div>
+              <label class="field">
+                <span data-i18n="sftPath">SFT LoRA path / repository</span>
+                <input id="sftPath" value="ReyChiaro/MaskFlow" />
+              </label>
+              <label class="field">
+                <span data-i18n="sftWeight">SFT weight file</span>
+                <input id="sftWeight" value="maskflow-S.safetensors" />
+              </label>
+              <label class="field">
+                <span><span data-i18n="dmdPath">DMD LoRA path / repository</span> <small data-i18n="optional">Optional</small></span>
+                <input id="dmdPath" placeholder="ReyChiaro/MaskFlow" />
+              </label>
+              <label class="field">
+                <span><span data-i18n="dmdWeight">DMD weight file</span> <small data-i18n="optional">Optional</small></span>
+                <input id="dmdWeight" placeholder="maskflow-SEC-tcfg4-step8.safetensors" />
+              </label>
+
+              <div class="section-label pipeline-label" data-i18n="pipeline">Pipeline</div>
+              <div class="runtime-grid two">
+                <label class="field"><span data-i18n="maskDilation">Mask dilation</span><input id="maskDilation" type="number" value="25" /></label>
+                <label class="field"><span data-i18n="maskBlurKernel">Mask blur kernel</span><input id="maskBlur" type="number" value="25" /></label>
+                <label class="field"><span data-i18n="maskBlurSigma">Mask blur sigma</span><input id="maskBlurSigma" type="number" step="0.1" value="25" /></label>
+                <label class="field"><span data-i18n="maskEdgeWidth">Mask edge width</span><input id="maskEdge" type="number" value="50" /></label>
+                <label class="field"><span>Mask CFG</span><input id="maskCfg" type="number" step="0.1" value="1.0" /></label>
+                <label class="field"><span data-i18n="poissonIterations">Poisson iterations</span><input id="poissonIter" type="number" value="50" /></label>
+              </div>
+              <div class="check-grid">
+                <label><input id="poisson" type="checkbox" checked /><span>Soft-Poisson</span></label>
+                <label><input id="localDenoise" type="checkbox" /><span>Local denoise</span></label>
+                <label><input id="pixelBlend" type="checkbox" checked /><span>Pixel blend</span></label>
+              </div>
+              <button class="secondary-button" id="loadModelButton" type="button" data-i18n="loadModel">Load model &amp; LoRA only</button>
+            </div>
+          </details>
+
+          <button class="generate-button" id="generateButton" type="submit" disabled>
+            <span id="generateButtonText" data-i18n="startGenerate">Generate</span><span class="button-arrow">→</span>
+          </button>
+        </form>
+
+        <section class="progress-card" id="progressCard" hidden aria-live="polite">
+          <div class="progress-copy"><strong id="progressStage" data-i18n="preparingTask">Preparing task</strong><span id="progressValue">0%</span></div>
+          <div class="progress-track"><span id="progressBar"></span></div>
+          <p data-i18n="progressHint">The first run downloads and loads the model. Later runs reuse it.</p>
+        </section>
+
+        <section class="result-card" id="resultCard" hidden>
+          <div class="result-heading"><div><p class="eyebrow">03 · RESULT</p><h2 data-i18n="editComplete">Edit complete</h2></div><a id="saveResult" class="save-link" download="maskflow-result.png" data-i18n="saveResult">Save result</a></div>
+          <div class="result-frame"><img id="resultImage" alt="MaskFlow edit result" data-i18n-alt="resultAlt" /></div>
+        </section>
+      </aside>
+    </main>
+
+    <div class="toast" id="toast" role="status"></div>
+  </body>
+</html>
