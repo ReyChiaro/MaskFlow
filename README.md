@@ -187,21 +187,6 @@ MaskFlow is also well suited to applications such as infographic editing, where 
 
 ![infographics](assets/readme/infographics.jpg)
 
-
-## Editor
-
-We release the image editor for convenient usage, supporting:
-
-- **Freeform Mask:** User can draw masks on the source image with any shapes to identify the editable region. The masks can also be saved for future use!
-- **Online Inference:** The editor can be deployed on the server to share the convenience to more people.
-
-![editor-demo](assets/readme/editor-demo.png)
-
-### Deployment
-
-After environment is ready, just run `uv run python -m editor`, and this editor will deployed on `http://127.0.0.1:7890` on the local by default.
-
-
 ## License
 
 MaskFlow code and adapter weights are released under the [MIT License](LICENSE). Use of the Qwen base model and third-party datasets remains subject to their respective licenses and terms.
