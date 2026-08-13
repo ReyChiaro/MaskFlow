@@ -47,8 +47,12 @@ def merge_lora(
     lora_path: str,
     adapter_name: str,
     lora_scale: float = 1.0,
+    weight_name: str | None = None,
 ):
-    transformer.load_lora_adapter(lora_path, adapter_name=adapter_name, prefix=None)
+    load_kwargs = {"adapter_name": adapter_name, "prefix": None}
+    if weight_name:
+        load_kwargs["weight_name"] = weight_name
+    transformer.load_lora_adapter(lora_path, **load_kwargs)
     transformer.set_adapter(adapter_name)
     transformer.fuse_lora(
         lora_scale=lora_scale,
@@ -57,6 +61,35 @@ def merge_lora(
     )
     transformer.unload_lora()
     logger.info(f"Merged LoRA '{lora_path}' into transformer.")
+
+
+def load_inference_loras(transformer: torch.nn.Module, checkpoint_cfgs: OmegaConf):
+    """Apply the SFT LoRA and, when requested, activate its DMD residual LoRA."""
+    sft_path = checkpoint_cfgs.get("sft_path")
+    dmd_path = checkpoint_cfgs.get("dmd_path")
+
+    if dmd_path and not sft_path:
+        raise ValueError("checkpoint.sft_path is required when checkpoint.dmd_path is set.")
+
+    if sft_path:
+        merge_lora(
+            transformer,
+            sft_path,
+            checkpoint_cfgs.get("sft_adapter_name", "maskflow"),
+            weight_name=checkpoint_cfgs.get("sft_weight_name"),
+        )
+
+    if dmd_path:
+        dmd_adapter_name = checkpoint_cfgs.get("dmd_adapter_name", "dmd")
+        load_kwargs = {"prefix": None, "adapter_name": dmd_adapter_name}
+        if checkpoint_cfgs.get("dmd_weight_name"):
+            load_kwargs["weight_name"] = checkpoint_cfgs.dmd_weight_name
+        transformer.load_lora_adapter(dmd_path, **load_kwargs)
+        transformer.set_adapter(dmd_adapter_name)
+        logger.info(f"Loaded DMD LoRA '{dmd_path}' as adapter '{dmd_adapter_name}'.")
+
+    if not sft_path and not dmd_path:
+        logger.warning("No MaskFlow LoRA checkpoint was configured; using the base transformer.")
 
 
 def save_lora_adapter(

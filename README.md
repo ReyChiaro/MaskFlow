@@ -7,7 +7,7 @@
   <a href="https://arxiv.org/abs/2608.06929"><img src="https://img.shields.io/badge/arXiv-Paper-751D38?logo=arxiv&amp;logoColor=white" alt="arXiv Paper" /></a>
   <a href="https://github.com/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/GitHub-Code-E38DA7?logo=github&amp;logoColor=white" alt="GitHub Code" /></a>
   <a href="https://huggingface.co/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/Hugging_Face-Model-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Model" /></a>
-  <a href="https://huggingface.co/datasets/ReyChiaro/MaskFlow"><img src="https://img.shields.io/badge/Hugging_Face-Dataset-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Dataset" /></a>
+  <a href="https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k"><img src="https://img.shields.io/badge/Hugging_Face-Dataset-EFD046?logo=huggingface&amp;logoColor=white" alt="Hugging Face Dataset" /></a>
   <a href="https://github.com/ModelTC/LightX2V"><img src="https://img.shields.io/badge/LightX2V-Demo-67A7E8?logo=github&amp;logoColor=white" alt="LightX2V Demo" /></a>
 </p>
 
@@ -19,7 +19,7 @@
 > - Trainers
 > - Evaluators
 > 
-> 🎨 <u>**Dataset**</u>: The dataset is available on [🤗 Hugging Face](https://huggingface.co/datasets/ReyChiaro/MaskFlow).
+> 🎨 <u>**Dataset**</u>: MaskEdit-10k is available on [🤗 Hugging Face](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k).
 >
 > 🩵 <u>**Demo (Coming soon)**</u>: MaskFlow is integrated into [LightX2V](https://github.com/ModelTC/LightX2V) for an accessible inference workflow.
 >
@@ -63,109 +63,89 @@ Install a PyTorch build compatible with your CUDA environment if the automatical
 
 ### 2. Prepare the inputs
 
-Prepare a source image and a spatially aligned mask. White pixels in the mask indicate the region to edit; black pixels indicate the region to preserve. Download the MaskFlow LoRA weights and provide their local path with `--lora-path`.
+Prepare a source RGB image and a spatially aligned mask. White pixels in the mask indicate the region to edit; black pixels indicate the region to preserve. If a prompt comes from MaskEdit-10k and contains `[MASK_AREA]`, replace the placeholder with a natural referring phrase before inference.
 
-### 3. Run single-image inference
+### 3. Choose a checkpoint
+
+The LoRA adapters are hosted in [`ReyChiaro/MaskFlow`](https://huggingface.co/ReyChiaro/MaskFlow). Diffusers downloads and caches the selected files automatically.
+
+| File | Variant | Steps | Text CFG | Intended use |
+|---|---|---:|---:|---|
+| `maskflow-S.safetensors` | S | 50 | 4.0 | Standard checkpoint trained on the `scene` split |
+| `maskflow-S-tcfg4-step8.safetensors` | S distilled | 8 | 4.0 | Accelerated scene editing |
+| `maskflow-S-tcfg4-step16.safetensors` | S distilled | 16 | 4.0 | Accelerated scene editing |
+| `maskflow-SEC.safetensors` | SEC | 50 | 4.0 | Standard checkpoint trained on all MaskEdit-10k splits |
+| `maskflow-SEC-tcfg4-step8.safetensors` | SEC distilled | 8 | 4.0 | Accelerated general editing |
+| `maskflow-SEC-tcfg4-step16.safetensors` | SEC distilled | 16 | 4.0 | Accelerated general editing |
+
+`S` denotes training on the scene split, while `SEC` denotes training on all scene and infographic splits. A distilled LoRA is a residual adapter: it must be used with its matching standard SFT LoRA (`S` with `S`, or `SEC` with `SEC`). The SFT adapter is loaded as `maskflow`, and the distilled adapter is loaded as `dmd`.
+
+### 4. Run standard 50-step inference
 
 ```bash
 uv run python inference.py \
-  --pretrained-model Qwen/Qwen-Image-Edit-2511 \
-  --lora-path /path/to/maskflow-lora \
-  --source /path/to/source.png \
-  --mask /path/to/mask.png \
-  --prompt "Replace the masked object with a red ceramic vase." \
-  --output outputs/result.png
+  input.source=/absolute/path/to/source.png \
+  input.mask=/absolute/path/to/mask.png \
+  'input.prompt=Replace the masked object with a red ceramic vase.' \
+  checkpoint.sft_path=ReyChiaro/MaskFlow \
+  checkpoint.sft_weight_name=maskflow-SEC.safetensors \
+  runtime.num_inference_steps=50 \
+  runtime.text_cfg_scale=4.0 \
+  output.path=outputs/result.png
 ```
 
-The output directory is created automatically. Omit `--lora-path` only when intentionally running the base model without the MaskFlow adapter.
+The base model defaults to [`Qwen/Qwen-Image-Edit-2511`](https://huggingface.co/Qwen/Qwen-Image-Edit-2511), and the output directory is created automatically.
+
+## Distribution Matching Distillation
+
+To improve efficiency for practical deployment, we apply Distribution Matching Distillation (DMD) and provide accelerated 8-step and 16-step variants. The distilled LoRA represents a residual on top of the corresponding standard MaskFlow checkpoint, so both the matching SFT and DMD weights are required during inference. Although the student is distilled with teacher text classifier-free guidance, enabling CFG during student inference generally gives better performance.
+
+Both the standard SFT LoRA and its matching distilled LoRA are required. The following example uses the SEC 8-step pair:
+
+```bash
+uv run python inference.py \
+  input.source=/absolute/path/to/source.png \
+  input.mask=/absolute/path/to/mask.png \
+  'input.prompt=Replace the masked object with a red ceramic vase.' \
+  checkpoint.sft_path=ReyChiaro/MaskFlow \
+  checkpoint.sft_weight_name=maskflow-SEC.safetensors \
+  checkpoint.dmd_path=ReyChiaro/MaskFlow \
+  checkpoint.dmd_weight_name=maskflow-SEC-tcfg4-step8.safetensors \
+  runtime.num_inference_steps=8 \
+  runtime.text_cfg_scale=4.0 \
+  output.path=outputs/result.png
+```
+
+To use local files, pass the two `.safetensors` paths and leave the corresponding `weight_name` fields unset:
+
+```bash
+checkpoint.sft_path=/absolute/path/to/maskflow-SEC.safetensors \
+checkpoint.dmd_path=/absolute/path/to/maskflow-SEC-tcfg4-step8.safetensors
+```
 
 <details>
-<summary><strong>Command-line options</strong></summary>
+<summary>Configuration reference</summary>
 
-Boolean options accept `true`/`false`, `1`/`0`, `yes`/`no`, `y`/`n`, or `on`/`off`.
+## Configuration reference
 
-#### Model
+Inference uses [Hydra](https://hydra.cc/), so any field in [`configs/inference.yaml`](configs/inference.yaml) or the selected pipeline configuration can be overridden with `key=value`.
 
-| Option | Default | Description |
+| Override | Default | Description |
 |---|---:|---|
-| `--pipeline` | `qwenimage_mask_flow` | Pipeline to run. MaskFlow aliases include `maskflow` and `qwenimage_mask_flow`; base editor aliases are also supported. |
-| `--pretrained-model` | required | Local path or Hugging Face ID of the base Qwen-Image-Edit model. |
-| `--lora-path` | `None` | Local directory or file containing the optional safetensors LoRA adapter. |
-| `--adapter-name` | `maskflow` | Name assigned to the loaded LoRA adapter. |
+| `checkpoint.sft_path` | `null` | Local SFT LoRA path or Hugging Face repository ID |
+| `checkpoint.sft_weight_name` | `null` | SFT filename when loading from a multi-weight Hub repository |
+| `checkpoint.dmd_path` | `null` | Local distilled LoRA path or Hugging Face repository ID |
+| `checkpoint.dmd_weight_name` | `null` | Distilled filename when loading from a multi-weight Hub repository |
+| `runtime.device` | `cuda` | Torch device used for inference |
+| `runtime.dtype` | `bfloat16` | Torch compute dtype |
+| `runtime.seed` | `42` | Random seed |
+| `runtime.num_inference_steps` | `50` | Denoising steps; must match the selected distilled checkpoint |
+| `runtime.text_cfg_scale` | `4.0` | Text classifier-free guidance scale |
+| `output.path` | timestamped path | Output image path |
 
-#### Inputs and outputs
-
-| Option | Default | Description |
-|---|---:|---|
-| `--source` | required | Path to the source RGB image. |
-| `--mask` | required | Path to the mask image; white pixels are edited. |
-| `--prompt` | required | Text instruction describing the desired edit. |
-| `--negative-prompt` | empty | Optional negative prompt used for classifier-free guidance. |
-| `--output` | required | Destination path for the edited image. |
-
-#### Inference
-
-| Option | Default | Description |
-|---|---:|---|
-| `--device` | automatic | Torch device such as `cuda:0` or `cpu`; automatically selects CUDA when available. |
-| `--dtype` | `bf16` | Compute dtype: `bf16`, `fp16`, or `fp32` and their long-form aliases. |
-| `--seed` | `42` | Random seed for reproducible inference. |
-| `--num-inference-steps` | `50` | Number of denoising steps. |
-| `--text-cfg-scale` | `1.0` | Text classifier-free guidance scale. |
-| `--mask-cfg-scale` | `1.0` | Mask classifier-free guidance scale. |
-| `--mask-threshold` | `0.5` | Threshold used to binarize the mask; use a negative value to keep a soft mask. |
-| `--save-debug` | off | Also save intermediate mask, edge, and output tensors beside the result. |
-
-#### Mask-aware editing
-
-| Option | Default | Description |
-|---|---:|---|
-| `--mask-dilation-kernel` | `25` | Kernel size used to dilate the edit mask. |
-| `--mask-blur-kernel` | `25` | Kernel size used to blur the mask. |
-| `--mask-blur-sigma` | `25` | Gaussian sigma used for mask smoothing. |
-| `--mask-edge-width` | `50` | Width of the mask boundary region. |
-| `--enable-vae-mask-encoding` | `true` | Inject the mask during VAE encoding. |
-| `--cfg-type` | `condition_weighted` | Mask CFG formulation: `progressive` or `condition_weighted`. |
-| `--mask-cfg-null-type` | `full_one` | Null-mask representation: `full_one` or `null`. |
-| `--enable-mask-cfg-gating` | `false` | Gate the mask CFG residual with mask latents. |
-| `--enable-masked-loss` | `true` | Enable the mask-aware objective setting used by the pipeline. |
-| `--enable-pixel-blend` | `true` | Blend preserved pixels directly from the source image. |
-| `--enable-local-denoise-infer` | `false` | Enable local denoising during inference. |
-| `--local-denoise-start` | `0.0` | Start of the normalized local-denoising interval. |
-| `--local-denoise-end` | `1.0` | End of the normalized local-denoising interval. |
-
-#### Soft-Poisson refinement
-
-| Option | Default | Description |
-|---|---:|---|
-| `--enable-poisson-infer` | `true` | Enable Soft-Poisson refinement during inference. |
-| `--poisson-start` | `0.0` | Start of the normalized refinement interval. |
-| `--poisson-end` | `1.0` | End of the normalized refinement interval. |
-| `--poisson-lambda-e` | `1.0` | Weight of the edit-region term. |
-| `--poisson-lambda-s` | `1.0` | Weight of the source-consistency term. |
-| `--poisson-num-iter` | `50` | Number of Soft-Poisson optimization iterations. |
-| `--poisson-momentum` | `0.1` | Momentum used by the refinement update. |
-
-#### Timestep scheduler
-
-| Option | Default | Description |
-|---|---:|---|
-| `--weighting-scheme` | `logit_normal` | Timestep weighting scheme: `logit_normal` or `mode`. |
-| `--logit-normal-mean` | `0.0` | Mean of the logit-normal timestep distribution. |
-| `--logit-normal-std` | `1.0` | Standard deviation of the logit-normal timestep distribution. |
-| `--mode-scale` | `1.29` | Scale used by the mode weighting scheme. |
-| `--base-image-seq-len` | `256` | Base image sequence length used for timestep shifting. |
-| `--base-shift` | `0.5` | Shift associated with the base sequence length. |
-| `--max-image-seq-len` | `8192` | Maximum image sequence length used for timestep shifting. |
-| `--max-shift` | `0.9` | Shift associated with the maximum sequence length. |
-| `--shift` | `1.0` | Fixed timestep shift when dynamic shifting is disabled. |
-| `--shift-power` | `1` | Exponent applied by the timestep-shift schedule. |
-| `--time-shift-type` | `exponential` | Dynamic shift interpolation: `exponential` or `linear`. |
-| `--use-dynamic-shifting` | `true` | Adapt the timestep shift to the image sequence length. |
-| `--unmask-with` | `noisy_source` | Content used outside the mask: `target`, `source`, `noisy_target`, or `noisy_source`. |
+The adapter names are fixed to `maskflow` for SFT and `dmd` for step distillation. If `checkpoint.dmd_path` is provided without `checkpoint.sft_path`, inference stops with an error instead of silently producing an incorrectly initialized result.
 
 </details>
-
 
 ## Visualization
 
@@ -178,9 +158,9 @@ MaskFlow is also well suited to applications such as infographic editing, where 
 ![infographics](assets/readme/infographics.jpg)
 
 
-## Distribution Matching Distillation
+## License
 
-To improve efficiency for practical deployment, we apply Distribution Matching Distillation (DMD) and provide an accelerated variant that completes generation in only eight inference steps.
+MaskFlow code and adapter weights are released under the [MIT License](LICENSE). Use of the Qwen base model and third-party datasets remains subject to their respective licenses and terms.
 
 ## Citation
 

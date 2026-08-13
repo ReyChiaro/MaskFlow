@@ -4,7 +4,7 @@ defaults:
   - optimizer: prodigy
   - pipeline: qwenimage_mask_flow
   - project: train
-  - adapter: dmd_lora
+  - adapter: lora
   - lr_scheduler: null
   - trainer: dmd
   - _self_
@@ -17,3 +17,6 @@ hydra:
     handlers:
       file:
         filename: ${hydra.runtime.output_dir}/${hydra.job.name}-rank-${oc.env:RANK,0}.log
+
+adapter:
+  adapter_name: dmd
