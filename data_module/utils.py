@@ -2,7 +2,7 @@ import os
 import json
 import math
 import torch
-import torchvision.transforms.functional as T
+import torchvision.transforms.v2.functional as T
 
 from loguru import logger
 
@@ -42,7 +42,7 @@ def reshape_to_divisible_max_resolution(
     aspect_ratio: float | None = None,
     max_resolution: int = MAX_RESOLUTION,
     divisible_by: int = DIVISIBLE_BY,
-    interpolation: T.InterpolationMode = T.InterpolationMode.BICUBIC,
+    interpolation: T.InterpolationMode = T.InterpolationMode.LANCZOS,
 ):
     aspect_ratio = aspect_ratio or image.shape[-1] / image.shape[-2]
     # ------------- Reshape to max resolution ------------- #
@@ -52,7 +52,12 @@ def reshape_to_divisible_max_resolution(
         image,
         [max_h, max_w],
         interpolation=interpolation,
-        antialias=interpolation in {T.InterpolationMode.BILINEAR, T.InterpolationMode.BICUBIC},
+        antialias=interpolation
+        in {
+            T.InterpolationMode.BILINEAR,
+            T.InterpolationMode.BICUBIC,
+            T.InterpolationMode.LANCZOS,
+        },
     )
     return image
 
