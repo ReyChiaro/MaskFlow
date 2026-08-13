@@ -92,7 +92,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     enable_local_denoise_infer: bool = False
     local_denoise_steps: list[float] = dataclasses.field(default_factory=list)
 
-    enable_pixel_blend: bool = False
+    enable_pixel_blend: bool = True
 
     enable_poisson_train: bool = True
     enable_poisson_infer: bool = True
@@ -790,6 +790,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         num_inference_steps: int = 50,
         text_cfg_scale: float = 1.0,
         mask_cfg_scale: float = 1.0,
+        progress_callback=None,
     ) -> list[torch.Tensor]:
         preprocessed_data = self.preprocess_inputs(batch)
         model_inputs = self.prepare_eval_inputs(preprocessed_data, text_cfg_scale, mask_cfg_scale)
@@ -802,7 +803,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         noise = copy.deepcopy(model_inputs.noise)
 
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
-            for t, curr_sigma, next_sigma, d_sigma_dt in tqdm(inferencer, total=num_inference_steps):
+            for step_index, (t, curr_sigma, next_sigma, d_sigma_dt) in enumerate(
+                tqdm(inferencer, total=num_inference_steps), start=1
+            ):
                 curr_sigma = curr_sigma.to(xt.device)
                 next_sigma = next_sigma.to(xt.device)
                 d_sigma_dt = d_sigma_dt.to(xt.device)
@@ -849,6 +852,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     runtime_mask,
                     noise,
                 )
+                if progress_callback is not None:
+                    progress_callback(step_index, num_inference_steps)
 
         output = QwenImageEditPlusPipeline._unpack_latents(
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor

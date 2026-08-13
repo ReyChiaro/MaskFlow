@@ -1,0 +1,2 @@
+"""Local MaskFlow image editor."""
+
