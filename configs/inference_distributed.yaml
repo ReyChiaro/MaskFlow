@@ -3,11 +3,11 @@ defaults:
   - adapter: lora
   - _self_
 
-input:
-  source: ???
-  mask: ???  # White pixels mark the edit region.
-  prompt: ???
-  negative_prompt: ""
+dataset:
+  root: ???
+  data_file: ${dataset.root}/test.jsonl
+  prompt_key: edit_instruction
+  negative_prompt_key: negative_prompt
 
 checkpoint:
   sft_path: null
@@ -18,18 +18,23 @@ checkpoint:
   dmd_adapter_name: dmd
 
 runtime:
-  device: cuda
   dtype: bfloat16
   seed: 42
   num_inference_steps: 50
   text_cfg_scale: 4.0
-  mask_cfg_scale: 1.0  # no use
+  mask_cfg_scale: 1.0
 
 output:
-  path: outputs/inference/${now:%Y%m%d-%H%M%S}/result.png
+  dir: outputs/inference_distributed
+  image_dir: images
 
 hydra:
   run:
-    dir: outputs/inference/${now:%Y%m%d-%H%M%S}/hydra
+    dir: ${output.dir}/hydra
+  output_subdir: .hydra/rank-${oc.env:RANK,0}
+  job_logging:
+    handlers:
+      file:
+        filename: ${hydra.runtime.output_dir}/${hydra.job.name}-rank-${oc.env:RANK,0}.log
   job:
     chdir: false

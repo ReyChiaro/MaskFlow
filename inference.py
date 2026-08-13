@@ -8,7 +8,7 @@ from loguru import logger
 from omegaconf import DictConfig
 from PIL import Image
 
-from trainer.lora_utils import merge_lora
+from trainer.lora_utils import load_inference_loras
 
 
 def load_image(path: str) -> torch.Tensor:
@@ -25,20 +25,7 @@ def build_pipeline(cfg: DictConfig, device: torch.device, dtype: torch.dtype):
         generator=generator,
     )
 
-    if cfg.checkpoint.get("sft_path"):
-        merge_lora(
-            pipeline.transformer,
-            cfg.checkpoint.sft_path,
-            cfg.checkpoint.sft_adapter_name,
-            cfg.checkpoint.sft_scale,
-        )
-
-    pipeline.transformer.load_lora_adapter(
-        cfg.checkpoint.path,
-        prefix=None,
-        adapter_name=cfg.checkpoint.adapter_name,
-    )
-    pipeline.transformer.set_adapter(cfg.checkpoint.adapter_name)
+    load_inference_loras(pipeline.transformer, cfg.checkpoint)
     pipeline.vae.eval()
     pipeline.text_pipeline.text_encoder.eval()
     pipeline.transformer.eval()
