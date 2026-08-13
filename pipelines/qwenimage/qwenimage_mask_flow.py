@@ -17,7 +17,7 @@ from loguru import logger
 
 from schedulers import MaskFlowScheduler
 from pipelines.base_pipeline import PreprocessOutput
-from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus, QwenForwardOutput
+from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus, QwenForwardOutput, resize_rgb
 from data_module.utils import MAX_RESOLUTION
 
 
@@ -110,19 +110,22 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     # ---------------- Mask Operations ---------------- #
     def dilate_mask(self, mask: torch.Tensor, ks: int | None = None) -> torch.Tensor:
         ks = ks or self.mask_dilation_kernel
+        ks += 1 - ks % 2
         padding = ks // 2
         dilated = F.max_pool2d(mask, kernel_size=ks, padding=padding, stride=1)
         return dilated
 
     def erode_mask(self, mask: torch.Tensor, ks: int | None = None) -> torch.Tensor:
         ks = ks or self.mask_dilation_kernel
+        ks += 1 - ks % 2
         mask = 1 - mask
         padding = ks // 2
         eroded = F.max_pool2d(mask, kernel_size=ks, padding=padding, stride=1)
         return 1.0 - eroded
 
     def blur_mask(self, mask: torch.Tensor) -> torch.Tensor:
-        blur_mask_tensor = T.gaussian_blur(mask, kernel_size=self.mask_blur_kernel, sigma=self.mask_blur_sigma)
+        kernel_size = self.mask_blur_kernel + 1 - self.mask_blur_kernel % 2
+        blur_mask_tensor = T.gaussian_blur(mask, kernel_size=kernel_size, sigma=self.mask_blur_sigma)
         blur_mask_tensor[mask < 1] = blur_mask_tensor[mask < 1] * 2
         blur_mask_tensor[mask >= 1] = 1
         return blur_mask_tensor
@@ -263,8 +266,17 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         source: torch.Tensor = conditions["source"].to(self.device, dtype=self.dtype)
         mask: torch.Tensor = conditions["mask"].to(self.device, dtype=self.dtype)
 
-        # ---------------- Preprocess ---------------- #
-        # Preprocess mask and edge
+        # Resize all spatial inputs first.
+        # masks use nearest-neighbor so their boundaries stay discrete.
+        h, w = target.shape[-2:]
+        aspect = w / h
+        w, h = calculate_dimensions(MAX_RESOLUTION, aspect)
+        target = resize_rgb(target, h, w)
+        source = resize_rgb(source, h, w)
+        mask = F.interpolate(mask, size=(h, w), mode="nearest")
+
+        # Apply morphology at model resolution so kernel sizes do not depend on
+        # the uploaded image resolution.
         edge = self.get_mask_edge(mask)
         if self.mask_dilation_kernel > 0:
             mask = self.dilate_mask(mask, self.mask_dilation_kernel)
@@ -272,25 +284,24 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             mask = self.blur_mask(mask)
             edge = self.blur_mask(edge)
 
-        # To tensor and reshape all images to target area as
-        # the mask/source images are supposed to be same shapes.
-        h, w = target.shape[-2:]
-        aspect = w / h
-        w, h = calculate_dimensions(MAX_RESOLUTION, aspect)
         target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
 
         cw, ch = calculate_dimensions(CONDITION_IMAGE_SIZE, aspect)
         vlm_conditions = {
-            "source": self.image_processor.resize(source, ch, cw),
-            "mask": self.image_processor.resize(mask, ch, cw),
+            "source": resize_rgb(source, ch, cw),
+            "mask": F.interpolate(
+                mask.float(),
+                size=(ch, cw),
+                mode="bilinear",
+                align_corners=False,
+                antialias=True,
+            ).to(dtype=mask.dtype),
         }
         dit_conditions = {
             "source": self.image_processor.preprocess(source, h, w).unsqueeze(2),
             "mask": self.image_processor.preprocess(mask, h, w).unsqueeze(2),
         }
-        raw_source = T.resize(source, [h, w], T.InterpolationMode.BILINEAR)
-        mask = T.resize(mask, [h, w], T.InterpolationMode.NEAREST)
-        edge = T.resize(edge, [h, w], T.InterpolationMode.NEAREST)
+        raw_source = source
 
         return QwenMaskFlowPreprocessOutput(
             prompt=prompt,

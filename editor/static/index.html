@@ -158,10 +158,15 @@
           </button>
         </form>
 
+        <section class="loading-card" id="loadingCard" hidden aria-live="polite">
+          <span class="loading-spinner" aria-hidden="true"></span>
+          <div><strong id="loadingStage" data-i18n="loadingModel">Loading model</strong><p data-i18n="loadingHint">The first model load may take a while. Later runs reuse it.</p></div>
+        </section>
+
         <section class="progress-card" id="progressCard" hidden aria-live="polite">
           <div class="progress-copy"><strong id="progressStage" data-i18n="preparingTask">Preparing task</strong><span id="progressValue">0%</span></div>
           <div class="progress-track"><span id="progressBar"></span></div>
-          <p data-i18n="progressHint">The first run downloads and loads the model. Later runs reuse it.</p>
+          <p id="progressHint" data-i18n="generationHint">Generation progress follows the denoising steps.</p>
         </section>
 
         <section class="result-card" id="resultCard" hidden>

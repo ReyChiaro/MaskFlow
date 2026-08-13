@@ -1,11 +1,12 @@
 import os
 import torch
+import torchvision.transforms.functional as T
 
 from pathlib import Path
 from typing import Any
 
 from data_module.dataset import SchemaDataset
-from data_module.utils import crop_image_to_aspect_ratio, reshape_to_divisible_max_resolution
+from data_module.utils import center_crop_to_aspect_ratio, crop_image_to_aspect_ratio, reshape_to_divisible_max_resolution
 
 
 class MaskEditDataset(SchemaDataset):
@@ -16,7 +17,7 @@ class MaskEditDataset(SchemaDataset):
         data_file,
         load_start: int | float = 0.0,
         load_end: int | float = 1.0,
-        divisible_by: int = 16,
+        divisible_by: int = 32,
         enable_prompt_truncation: bool = False,
         replace_prompt_placeholder_with: str | None = None,
     ):
@@ -55,14 +56,27 @@ class MaskEditDataset(SchemaDataset):
 
         # Reshape conditions and target
         target, aspect_ratio = crop_image_to_aspect_ratio(target)
-        target = reshape_to_divisible_max_resolution(target, aspect_ratio)
+        target = reshape_to_divisible_max_resolution(target, aspect_ratio, divisible_by=self.divisible_by)
 
         if isinstance(conditions, dict):
             conditions = {k: self._load_image_tensor(os.path.join(self.image_root, c)) for k, c in conditions.items()}
-            conditions = {k: reshape_to_divisible_max_resolution(c, aspect_ratio) for k, c in conditions.items()}
+            conditions = {k: center_crop_to_aspect_ratio(c, aspect_ratio) for k, c in conditions.items()}
+            conditions = {
+                k: reshape_to_divisible_max_resolution(
+                    c,
+                    aspect_ratio,
+                    divisible_by=self.divisible_by,
+                    interpolation=T.InterpolationMode.NEAREST if k == "mask" else T.InterpolationMode.BICUBIC,
+                )
+                for k, c in conditions.items()
+            }
         else:
             conditions = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
-            conditions = [reshape_to_divisible_max_resolution(c, aspect_ratio) for c in conditions]
+            conditions = [center_crop_to_aspect_ratio(c, aspect_ratio) for c in conditions]
+            conditions = [
+                reshape_to_divisible_max_resolution(c, aspect_ratio, divisible_by=self.divisible_by)
+                for c in conditions
+            ]
 
         return {
             "image_name": image_name,

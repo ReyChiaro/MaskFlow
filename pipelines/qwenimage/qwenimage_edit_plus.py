@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import torchvision.transforms as T
 
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
     QwenImageEditPlusPipeline,
@@ -16,6 +17,15 @@ from typing import Any, Literal, Optional
 from schedulers import RectifiedFlowMatchingScheduler
 from pipelines.base_pipeline import BasePipeline, PreprocessOutput, ForwardOutput
 from data_module.utils import MAX_RESOLUTION
+
+
+def resize_rgb(image: torch.Tensor, height: int, width: int) -> torch.Tensor:
+    """Resize RGB tensors with antialiasing instead of torch's nearest-neighbor default."""
+    if image.shape[-2:] == (height, width):
+        return image
+    dtype = image.dtype
+    image = T.Resize((height, width), T.InterpolationMode.LANCZOS)(image.float())
+    return image.clamp(0, 1).to(dtype=dtype)
 
 
 @dataclass
@@ -97,6 +107,7 @@ class QwenImageEditPlus(BasePipeline):
         h, w = target.shape[-2:]
         aspect = w / h
         w, h = calculate_dimensions(MAX_RESOLUTION, aspect)
+        target = resize_rgb(target, h, w)
         target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
 
         vlm_conditions = {}
@@ -107,7 +118,8 @@ class QwenImageEditPlus(BasePipeline):
                 aspect = cw / ch
                 cw, ch = calculate_dimensions(CONDITION_IMAGE_SIZE, aspect)
                 vw, vh = calculate_dimensions(MAX_RESOLUTION, aspect)
-                vlm_conditions[k] = self.image_processor.resize(c, ch, cw)
+                vlm_conditions[k] = resize_rgb(c, ch, cw)
+                c = resize_rgb(c, vh, vw)
                 dit_conditions[k] = self.image_processor.preprocess(c, vh, vw).unsqueeze(2)
 
         return PreprocessOutput(
