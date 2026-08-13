@@ -30,6 +30,7 @@ scripts/
 viewer/
 submissions/
 maskflow_*/
+checkpoints/
 qweninpaint/
 .env
 
