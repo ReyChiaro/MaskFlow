@@ -19,20 +19,46 @@
 > - Trainers
 > - Evaluators
 > - Editor
-> 
+>
 > 🎨 <u>**Dataset**</u>: MaskEdit-10k is available on [🤗 Hugging Face](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k).
 
 > 💜 <u>**Local Editor**</u>: Editor is relsead for pratical **user-specified** and **freeform** masks designing, the editor can be deployed on the local and server.
-> 
+>
 > 🩵 <u>**Demo (Comming soon)**</u>: MaskFlow is integrated into [LightX2V](https://github.com/ModelTC/LightX2V) for an accessible inference workflow.
 
 > ⭐️ **Please leave your star if these can help you to create attractive artworks** ⭐️
 
-## Introduction
+
+## Contents
+
+- [Contents](#contents)
+- [Introduction](#introduction)
+- [🪄 \[New\] Editor](#-new-editor)
+- [Quick Start](#quick-start)
+- [Distribution Matching Distillation](#distribution-matching-distillation)
+- [Configuration reference](#configuration-reference)
+- [Visualization](#visualization)
+- [License](#license)
+- [Citation](#citation)
+
+## 🌊 Introduction
 
 MaskFlow is a mask-aware framework for precise regional image editing. Given a source image, a spatial mask, and a text instruction, it edits the selected region while preserving the surrounding content. Its localized generation process and Soft-Poisson refinement improve regional control, background consistency, and boundary quality.
 
-## Quick Start
+## 🪄 [New] Editor
+
+We release the image editor for convenient usage, supporting:
+
+- **Freeform Mask:** User can draw masks on the source image with any shapes to identify the editable region. The masks can also be saved for future use!
+- **Online Inference:** The editor can be deployed on the server to share the convenience to more people.
+
+![editor-demo](assets/readme/editor-demo.png)
+
+### Deployment
+
+After environment is ready, just run `uv run python -m editor`, and this editor will deployed on `http://127.0.0.1:7890` on the local by default.
+
+## 🍪 Quick Start
 
 ### 1. Set up the environment
 
