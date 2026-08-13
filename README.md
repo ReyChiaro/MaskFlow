@@ -18,11 +18,14 @@
 > - DataModule
 > - Trainers
 > - Evaluators
+> - Editor
 > 
 > 🎨 <u>**Dataset**</u>: MaskEdit-10k is available on [🤗 Hugging Face](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k).
->
-> 🩵 <u>**Demo (Coming soon)**</u>: MaskFlow is integrated into [LightX2V](https://github.com/ModelTC/LightX2V) for an accessible inference workflow.
->
+
+> 💜 <u>**Local Editor**</u>: Editor is relsead for pratical **user-specified** and **freeform** masks designing, the editor can be deployed on the local and server.
+> 
+> 🩵 <u>**Demo (Comming soon)**</u>: MaskFlow is integrated into [LightX2V](https://github.com/ModelTC/LightX2V) for an accessible inference workflow.
+
 > ⭐️ **Please leave your star if these can help you to create attractive artworks** ⭐️
 
 ## Introduction
@@ -157,6 +160,20 @@ MaskFlow supports a diverse range of mask-guided image editing tasks. The compar
 MaskFlow is also well suited to applications such as infographic editing, where the target location can be difficult to specify through language alone. Spatial masks provide direct and intuitive control, making the method practical for real-world editing workflows.
 
 ![infographics](assets/readme/infographics.jpg)
+
+
+## Editor
+
+We release the image editor for convenient usage, supporting:
+
+- **Freeform Mask:** User can draw masks on the source image with any shapes to identify the editable region. The masks can also be saved for future use!
+- **Online Inference:** The editor can be deployed on the server to share the convenience to more people.
+
+![editor-demo](assets/readme/editor-demo.png)
+
+### Deployment
+
+After environment is ready, just run `uv run python -m editor`, and this editor will deployed on `http://127.0.0.1:7890` on the local by default.
 
 
 ## License
