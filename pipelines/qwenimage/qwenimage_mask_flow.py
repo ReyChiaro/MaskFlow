@@ -806,10 +806,12 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 curr_sigma = curr_sigma.to(xt.device)
                 next_sigma = next_sigma.to(xt.device)
                 d_sigma_dt = d_sigma_dt.to(xt.device)
+
                 timestep = t.expand(xt.shape[0]).to(device=self.device, dtype=self.dtype)
                 cfg_branches = model_inputs.cfg_branches
                 text_cfg_enabled = text_cfg_scale > 1.0
                 mask_cfg_enabled = mask_cfg_scale > 1.0
+
                 predictions = {"pm": self.denoise_cfg_branch(cfg_branches["pm"], xt, timestep)}
                 if text_cfg_enabled or (self.cfg_type == "progressive" and mask_cfg_enabled):
                     predictions["nm"] = self.denoise_cfg_branch(cfg_branches["nm"], xt, timestep)
@@ -818,6 +820,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     predictions[null_mask_branch] = self.denoise_cfg_branch(
                         cfg_branches[null_mask_branch], xt, timestep
                     )
+
                 pred = self.combine_cfg_predictions(
                     predictions,
                     text_cfg_scale,
@@ -836,6 +839,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                         noise,
                         model_inputs.height,
                         model_inputs.width,
+                        disable_progress_bar=True,
                     )
 
                 runtime_mask = self.inference_mask(timestep, mask_latents)

@@ -10,11 +10,12 @@ input:
   negative_prompt: ""
 
 checkpoint:
-  sft_path: null  # Optional SFT LoRA fused before the final adapter.
-  sft_scale: 1.0
-  sft_adapter_name: null
-  path: ???  # Training export directory: .../lora_adapter
-  adapter_name: ${adapter.adapter_name}
+  sft_path: null
+  sft_weight_name: null  # Optional filename when sft_path is a Hugging Face repository ID.
+  sft_adapter_name: maskflow
+  dmd_path: null
+  dmd_weight_name: null  # Optional filename when dmd_path is a Hugging Face repository ID.
+  dmd_adapter_name: dmd
 
 runtime:
   device: cuda

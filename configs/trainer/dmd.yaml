@@ -13,7 +13,7 @@ lr_scheduler_configs: null
 # this explicitly with null only when the base already contains MaskFlow SFT.
 sft_lora_path: ???
 sft_lora_scale: 1.0
-sft_adapter_name: ???
+sft_adapter_name: maskflow
 
 # Teacher CFG is baked into the positive-condition Student branch.
 teacher_cfg_type: ${pipeline.cfg_type}  # progressive | condition_weighted
