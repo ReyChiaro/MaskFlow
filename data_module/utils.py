@@ -42,7 +42,7 @@ def reshape_to_divisible_max_resolution(
     aspect_ratio: float | None = None,
     max_resolution: int = MAX_RESOLUTION,
     divisible_by: int = DIVISIBLE_BY,
-    interpolation: T.InterpolationMode = T.InterpolationMode.LANCZOS,
+    interpolation: T.InterpolationMode = T.InterpolationMode.BICUBIC,
 ):
     aspect_ratio = aspect_ratio or image.shape[-1] / image.shape[-2]
     # ------------- Reshape to max resolution ------------- #

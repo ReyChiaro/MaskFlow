@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-import torchvision.transforms.v2 as T
+import torchvision.transforms as T
 
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
     QwenImageEditPlusPipeline,
@@ -24,7 +24,7 @@ def resize_rgb(image: torch.Tensor, height: int, width: int) -> torch.Tensor:
     if image.shape[-2:] == (height, width):
         return image
     dtype = image.dtype
-    image = T.Resize((height, width), T.InterpolationMode.LANCZOS, antialias=True)(image.float())
+    image = T.Resize((height, width), T.InterpolationMode.BICUBIC, antialias=True)(image.float())
     return image.clamp(0, 1).to(dtype=dtype)
 
 

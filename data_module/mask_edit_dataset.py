@@ -66,7 +66,7 @@ class MaskEditDataset(SchemaDataset):
                     c,
                     aspect_ratio,
                     divisible_by=self.divisible_by,
-                    interpolation=T.InterpolationMode.NEAREST if k == "mask" else T.InterpolationMode.LANCZOS,
+                    interpolation=T.InterpolationMode.NEAREST if k == "mask" else T.InterpolationMode.BICUBIC,
                 )
                 for k, c in conditions.items()
             }
