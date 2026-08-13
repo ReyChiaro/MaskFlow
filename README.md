@@ -41,7 +41,7 @@
 - [License](#license)
 - [Citation](#citation)
 
-## Introduction
+## 🌊 Introduction
 
 MaskFlow is a mask-aware framework for precise regional image editing. Given a source image, a spatial mask, and a text instruction, it edits the selected region while preserving the surrounding content. Its localized generation process and Soft-Poisson refinement improve regional control, background consistency, and boundary quality.
 
@@ -58,7 +58,7 @@ We release the image editor for convenient usage, supporting:
 
 After environment is ready, just run `uv run python -m editor`, and this editor will deployed on `http://127.0.0.1:7890` on the local by default.
 
-## Quick Start
+## 🍪 Quick Start
 
 ### 1. Set up the environment
 
