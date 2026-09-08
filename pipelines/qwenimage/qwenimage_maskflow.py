@@ -27,7 +27,7 @@ class QwenMaskFlowPreprocessOutput(PreprocessOutput):
     raw_source: torch.Tensor | None = None
     mask: torch.Tensor | None = None
     # edge: torch.Tensor | None = None
-    mask_cfg_dropped: bool = False
+    # mask_cfg_dropped: bool = False
 
 
 @dataclasses.dataclass
@@ -287,7 +287,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             target=target,
             raw_source=raw_source,
             mask=mask,
-            mask_cfg_dropped=bool(batch.get("mask_cfg_dropped", False)),
+            # mask_cfg_dropped=bool(batch.get("mask_cfg_dropped", False)),
         )
 
     def prepare_forward_inputs(self, preprocessed_data: QwenMaskFlowPreprocessOutput) -> QwenMaskFlowForwardOutput:
@@ -309,10 +309,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         dit_conditions = preprocessed_data.dit_conditions
 
         # TODO: There must be a more elegant way to implement CFG
-        if preprocessed_data.mask_cfg_dropped:
+        # if preprocessed_data.mask_cfg_dropped:
             # The masks are directly dropped from the conditions for null-mask branch
-            vlm_conditions = {"source": vlm_conditions["source"]}
-            dit_conditions = {"source": dit_conditions["source"]}
+            # vlm_conditions = {"source": vlm_conditions["source"]}
+            # dit_conditions = {"source": dit_conditions["source"]}
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, vlm_conditions)
 
         image_shapes = []
