@@ -1,4 +1,4 @@
-_target_: pipelines.qwenimage.qwenimage_mask_flow.QwenImageMaskFlow
+_target_: pipelines.qwenimage.qwenimage_maskflow.QwenImageMaskFlow
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
@@ -6,22 +6,22 @@ pretrained_model: Qwen/Qwen-Image-Edit-2511
 mask_dilation_kernel: 25
 mask_blur_kernel: 25
 mask_blur_sigma: 25.0
-mask_edge_width: 50
+# mask_edge_width: 50
 
 mask_loss_weight: 1.0
 edge_loss_weight: 0.0
 
-enable_vae_mask_encoding: true
+# enable_vae_mask_encoding: true
 
-cfg_type: condition_weighted  # progressive | condition_weighted
-mask_cfg_null_type: "null"    # full_one | null, NOTE: use "" to include null, otherwise parse to `None`
-enable_mask_cfg_gating: false
+# cfg_type: condition_weighted  # progressive | condition_weighted
+# mask_cfg_null_type: "null"    # full_one | null, NOTE: use "" to include null, otherwise parse to `None`
+# enable_mask_cfg_gating: false
 
 enable_masked_loss: true
 
-enable_local_denoise_train: false
-enable_local_denoise_infer: false
-local_denoise_steps: [0.0, 1.0]
+# enable_local_denoise_train: false
+# enable_local_denoise_infer: false
+# local_denoise_steps: [0.0, 1.0]
 
 enable_pixel_blend: true
 
