@@ -150,20 +150,6 @@ class BasePipeline:
             assert self.fsdp_configs is not None, f"FSDPStrategy is {fsdp_strategy}, but fsdp_configs are not given."
             if "transformer" in self.fsdp_configs:
                 self._register_fsdp_view_output_clone(self.transformer)
-            # module_configs = []
-            # for module_name, raw_configs in self._fsdp_module_configs:
-            #     configs: dict[str, Any] = copy.deepcopy(raw_configs)
-
-            #     # is_iterable = configs.pop("iterable", False)
-            #     reshard_after_forward = configs.pop("reshard_after_forward", True)
-
-            #     module = get_nested_attr(self, module_name)
-
-            #     if is_iterable:
-            #         for submodule in module:
-            #             module_configs.append((None, submodule, configs))
-            #     else:
-            #         module_configs.append((module_name, module, configs))
 
             for module_configs in self.fsdp_module_configs:
                 # module_name = module_configs["module_name"]
@@ -172,8 +158,6 @@ class BasePipeline:
                 fsdp_kwargs = dict(mesh=mesh, mp_policy=mp_policy, **configs)
                 # In-place
                 fully_shard(module, **fsdp_kwargs)
-                # if module_name is not None:
-                #     set_nested_attr(self, module_name, wrapped)
 
             self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
 
@@ -237,12 +221,14 @@ class BasePipeline:
         return transformer
 
     def forward_step(self, batch, **kwargs):
+        r"""
+        Training forward with batched samples.
+        """
         pass
 
     @torch.inference_mode()
     def eval_step(self, batch, num_inference_steps: int, **kwargs):
-        pass
-
-    @torch.inference_mode()
-    def generate(self, prompt: str, image: Image.Image | list[Image.Image] | None = None, **kwargs):
+        r"""
+        Evaluation forward with batched samples, usually used as batched evaluation on benchmarks or testsets.
+        """
         pass
