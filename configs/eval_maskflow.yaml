@@ -18,6 +18,7 @@ adapters:
 base_seed: 42
 weight_dtype: bf16
 
+# Use 1 for variable-size images: default collation stacks tensors within each batch.
 batch_size_per_process: 1
 num_workers: 4
 
@@ -27,4 +28,4 @@ eval_with_position_prompt: false
 
 hydra:
   run:
-    dir: ${project.output_dir}/hydra-configs
+    dir: ${project.output_dir}/hydra-configs/rank_${oc.env:RANK,0}
