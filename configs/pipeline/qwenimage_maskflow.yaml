@@ -9,7 +9,7 @@ mask_blur_sigma: 25.0
 # mask_edge_width: 50
 
 mask_loss_weight: 1.0
-edge_loss_weight: 0.0
+# edge_loss_weight: 0.0
 
 # enable_vae_mask_encoding: true
 

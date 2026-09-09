@@ -8,7 +8,7 @@ from utils.config import register_distributed_timestamp_resolver
 register_distributed_timestamp_resolver()
 
 
-@hydra.main(config_path="configs", config_name="train", version_base="v1.2")
+@hydra.main(config_path="configs", config_name="sft_maskflow", version_base="v1.2")
 def finetune(cfgs: OmegaConf):
     cfg_contents = "\n" + " Configs ".center(50, "=")
     cfg_contents += "\n" + OmegaConf.to_yaml(cfgs)

@@ -1,9 +1,15 @@
-torchrun \
+HYDRA_FULL_ERROR=1
+OMP_NUM_THREADS=8
+
+.venv/bin/python3 -m torch.distributed.run \
+    --standalone \
     --nnode 1 \
     --nproc-per-node 8 \
     --master-port 29666 \
     --master-addr "127.0.0.1" \
     finetune.py \
+    --config-path configs \
+    --config-name sft_maskflow \
     project.project_name=QwenImage-MaskFlow-r256 \
     trainer=maskflow \
     trainer.fsdp_strategy=no_shard \

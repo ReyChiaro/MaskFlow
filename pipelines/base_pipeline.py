@@ -31,11 +31,11 @@ class PreprocessOutput:
 @dataclasses.dataclass
 class ForwardOutput:
 
-    prompt_embeds: torch.Tensor
-    prompt_embeds_mask: torch.Tensor
+    prompt_embeds: torch.Tensor | None = None
+    prompt_embeds_mask: torch.Tensor | None = None
 
-    height: int
-    width: int
+    height: int | None = None
+    width: int | None = None
 
     noise: torch.Tensor | None = None
     noised_target: torch.Tensor | None = None
@@ -172,8 +172,7 @@ class BasePipeline:
             return output.clone() if output._base is not None else output
         if isinstance(output, tuple):
             return tuple(
-                item.clone() if isinstance(item, torch.Tensor) and item._base is not None else item
-                for item in output
+                item.clone() if isinstance(item, torch.Tensor) and item._base is not None else item for item in output
             )
         return output
 
@@ -230,5 +229,12 @@ class BasePipeline:
     def eval_step(self, batch, num_inference_steps: int, **kwargs):
         r"""
         Evaluation forward with batched samples, usually used as batched evaluation on benchmarks or testsets.
+        """
+        pass
+
+    @torch.inference_mode()
+    def generate(self, prompt: str | None = None, negative_prompt: str | None = None, **kwargs) -> torch.Tensor:
+        r"""
+        One step inference for single sample or server deploy.
         """
         pass

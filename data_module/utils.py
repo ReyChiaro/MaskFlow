@@ -59,7 +59,7 @@ def reshape_to_divisible_max_resolution(
             T.InterpolationMode.LANCZOS,
         },
     )
-    return image
+    return image.clamp(0, 1)
 
 
 def is_bucketed_dataset(data_file: str, sample_size: int = 1):

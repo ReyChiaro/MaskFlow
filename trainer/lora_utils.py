@@ -7,6 +7,7 @@ from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
 
+from diffusers.loaders.peft import PeftAdapterMixin
 from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 
@@ -43,15 +44,13 @@ def add_trainable_lora(
 
 
 def merge_lora(
-    transformer: torch.nn.Module,
+    transformer: PeftAdapterMixin,
     lora_path: str,
     adapter_name: str,
     lora_scale: float = 1.0,
-    weight_name: str | None = None,
 ):
+    """Merge lora weights into the model."""
     load_kwargs = {"adapter_name": adapter_name, "prefix": None}
-    if weight_name:
-        load_kwargs["weight_name"] = weight_name
     transformer.load_lora_adapter(lora_path, **load_kwargs)
     transformer.set_adapter(adapter_name)
     transformer.fuse_lora(
