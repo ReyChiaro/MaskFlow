@@ -10,9 +10,9 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
     CONDITION_IMAGE_SIZE,
     calculate_dimensions,
 )
-
+from PIL import Image
 from tqdm import tqdm
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 from loguru import logger
 
 from schedulers import MaskFlowScheduler
@@ -81,7 +81,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     mask_dilation_kernel: int = 25
     mask_blur_kernel: int = 25
     mask_blur_sigma: float = 25.0
-    mask_edge_width: int = 50
 
     mask_loss_weight: float = 1.0
     # edge_loss_weight: float = 0.0
@@ -89,9 +88,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     # Always true
     # enable_vae_mask_encoding: bool = True
 
-    cfg_type: Literal["progressive", "condition_weighted"] = "condition_weighted"
-    mask_cfg_null_type: Literal["full_one", "null"] = "null"
-    enable_mask_cfg_gating: bool = False
+    # cfg_type: Literal["progressive", "condition_weighted"] = "condition_weighted"
+    # mask_cfg_null_type: Literal["full_one", "null"] = "null"
+    # enable_mask_cfg_gating: bool = False
 
     enable_masked_loss: bool = True
 
@@ -110,8 +109,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     poisson_momentum: float = 0.1
 
     def __post_init__(self):
-        if self.cfg_type not in {"progressive", "condition_weighted"}:
-            raise ValueError(f"Unsupported cfg_type: {self.cfg_type}.")
+        # if self.cfg_type not in {"progressive", "condition_weighted"}:
+        #     raise ValueError(f"Unsupported cfg_type: {self.cfg_type}.")
         super().__post_init__()
 
     # ---------------- Mask Operations ---------------- #
@@ -310,9 +309,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         # TODO: There must be a more elegant way to implement CFG
         # if preprocessed_data.mask_cfg_dropped:
-            # The masks are directly dropped from the conditions for null-mask branch
-            # vlm_conditions = {"source": vlm_conditions["source"]}
-            # dit_conditions = {"source": dit_conditions["source"]}
+        # The masks are directly dropped from the conditions for null-mask branch
+        # vlm_conditions = {"source": vlm_conditions["source"]}
+        # dit_conditions = {"source": dit_conditions["source"]}
         prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, vlm_conditions)
 
         image_shapes = []
@@ -539,7 +538,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             height=height,
             width=width,
             noise=noise,
-            # conditions=cond_latents,
+            conditions=cond_latents,
             # image_shapes=image_shapes,
             mask_latents=mask_latents,
             # edge_latents=edge_latents,
@@ -600,10 +599,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
             if mask_ratio is not None:
                 loss_field = (1.0 / (mask_ratio + 1e-6)) * loss_field
-                loss_dict["mask_ratio"] = mask_ratio.mean().item()
+                loss_dict["mask_ratio"] = mask_ratio.mean()
 
         loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
-        loss_dict["loss"] = loss.item()
+        loss_dict["loss"] = loss
         return loss_dict
 
     def forward_step(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -794,7 +793,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                     )
 
                 # runtime_mask = self.inference_mask(timestep, mask_latents)
-                xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, d_sigma_dt, source, mask, noise)
+                xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, d_sigma_dt, source, mask_latents, noise)
 
         output = QwenImageEditPlusPipeline._unpack_latents(
             xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
@@ -805,3 +804,25 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             output = mask * output + (1.0 - mask) * raw_source
 
         return {"mask": mask, "output": output}
+
+    @torch.inference_mode()
+    def generate(
+        self,
+        prompt: str = None,
+        negative_prompt: str = None,
+        source_image: Image.Image | None = None,
+        mask_image: Image.Image | None = None,
+        height: int | None = None,
+        width: int | None = None,
+        num_inference_steps: int = 50,
+        text_cfg_scale: float = 4.0,
+        mask_dilation_kernel: int = 25,
+        mask_blur_kernel: int = 25,
+        mask_blur_sigma: float = 25.0,
+        enable_pixel_blend: bool = True,
+        enable_poisson_refine: bool = True,
+        poisson_lambda_e: float = 1.0,
+        poisson_lambda_s: float = 1.0,
+        poisson_momentum: float = 0.1,
+    ) -> torch.Tensor:
+        pass
