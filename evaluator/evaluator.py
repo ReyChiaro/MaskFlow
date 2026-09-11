@@ -25,6 +25,7 @@ class Evaluator:
         initialize_metrics()
         self.device = device
         self.metrics = get_metrics()
+        self.requested_metrics = metrics
 
         if metrics is not None:
             self.metrics = {k: fn for k, fn in self.metrics.items() if k in metrics}
@@ -32,12 +33,22 @@ class Evaluator:
     def compute(
         self,
         sources: torch.Tensor | list[torch.Tensor],
-        targets: torch.Tensor | list[torch.Tensor],
+        targets: torch.Tensor | list[torch.Tensor] | None = None,
         **kwargs,
     ) -> dict[str, float]:
-        assert _num_images(sources) == _num_images(
-            targets
-        ), f"Given sources ({_num_images(sources)}) and targets ({_num_images(targets)}) should contain same num of items."
+        metrics = self.metrics
+        target_free = targets is None
+        if target_free:
+            targets = kwargs.pop("originals", None)
+            if self.requested_metrics is None:
+                metrics = {name: metrics[name] for name in ("CLIP-TEXT", "PSNR", "SSIM", "DISTS")}
+        needs_reference = any(not name.startswith("CLIP-TEXT") for name in metrics)
+        if needs_reference:
+            if targets is None:
+                raise ValueError("Target-free metrics require originals (source images).")
+            assert _num_images(sources) == _num_images(
+                targets
+            ), f"Given sources ({_num_images(sources)}) and targets ({_num_images(targets)}) should contain same num of items."
 
         sources = _to_device(sources, self.device)
         targets = _to_device(targets, self.device)
@@ -45,7 +56,11 @@ class Evaluator:
         has_mask = kwargs.get("mask") is not None
 
         results = {}
-        for metric_name, metric_fn in self.metrics.items():
+        for metric_name, metric_fn in metrics.items():
+            if metric_name.startswith("CLIP-TEXT") and kwargs.get("prompts") is None:
+                if self.requested_metrics is not None or target_free:
+                    raise ValueError("CLIP-TEXT requires prompts.")
+                continue
             if metric_name.endswith(("-FG", "-BG")) and not has_mask:
                 logger.info(f"Skip {metric_name}: mask is not provided.")
                 continue

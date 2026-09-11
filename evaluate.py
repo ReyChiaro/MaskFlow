@@ -17,14 +17,19 @@ from tqdm import tqdm
 
 from data_module.dataset import SchemaDataset
 from data_module.dataloader import get_dataloader
+from data_module.sample_utils import image_name as sample_image_name
 from pipelines.base_pipeline import BasePipeline
 from trainer.lora_utils import merge_lora
 
 
-def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig):
+def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig | None):
+    if adapter_cfgs is None:
+        return
     for adapter_type, path_and_cfg in adapter_cfgs.items():
         path = path_and_cfg.path
         cfg = path_and_cfg.cfg
+        if not path and path_and_cfg.get("optional", False):
+            continue
         if not path:
             raise ValueError(f"adapters.{adapter_type}.path must point to a trained LoRA checkpoint.")
         logger.info(f"Load adapter {adapter_type} from {path}.")
@@ -88,10 +93,10 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
     # -------- Initialize Dataset -------- #
     evalset: SchemaDataset = instantiate(cfgs.evalset)
     # Preserve original filenames, but reject collisions before saving results.
-    names = Counter(Path(sample["target"]).stem for sample in evalset.samples)
+    names = Counter(sample_image_name(sample) for sample in evalset.samples)
     duplicates = [name for name, count in names.items() if count > 1]
     if duplicates:
-        raise ValueError(f"Evaluation target filenames must be unique; duplicate stems: {duplicates[:5]}")
+        raise ValueError(f"Evaluation output names must be unique; duplicates: {duplicates[:5]}")
 
     # No padding or dropping: every sample belongs to exactly one worker.
     local_evalset = Subset(evalset, range(rank, len(evalset), world_size))
@@ -131,10 +136,14 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
             text_cfg_scale=text_cfg_scale,
         )
         for i, image_name in enumerate(batch["image_name"]):
-            pred_path = prediction_dir / f"{image_name}.jpg"
+            extension = "png" if batch.get("target", False) is None else "jpg"
+            pred_path = prediction_dir / f"{image_name}.{extension}"
             mask_path = mask_dir / f"{image_name}.png"
+            pred_path.parent.mkdir(parents=True, exist_ok=True)
+            mask_path.parent.mkdir(parents=True, exist_ok=True)
             save_image(output["output"][i], pred_path)
-            save_image(output["mask"][i], mask_path)
+            if "mask" in output:
+                save_image(output["mask"][i], mask_path)
         logger.info(f"Rank {rank}: Eval [{step + 1}/{len(eval_loader)}] saved.")
     logger.info(f"Rank {rank}: evaluation finished, saved to {evaluate_dir}.")
 

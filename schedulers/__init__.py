@@ -1,2 +1,3 @@
 from .flow_matching import RectifiedFlowMatchingScheduler
 from .mask_flow import MaskFlowScheduler
+from .flux2_flow_matching import Flux2FlowMatchingScheduler, Flux2MaskFlowScheduler

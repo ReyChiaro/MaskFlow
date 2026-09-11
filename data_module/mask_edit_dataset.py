@@ -2,10 +2,10 @@ import os
 import torch
 import torchvision.transforms.v2.functional as T
 
-from pathlib import Path
 from typing import Any
 
 from data_module.dataset import SchemaDataset
+from data_module.sample_utils import image_name
 from data_module.utils import center_crop_to_aspect_ratio, crop_image_to_aspect_ratio, reshape_to_divisible_max_resolution
 
 
@@ -50,13 +50,17 @@ class MaskEditDataset(SchemaDataset):
         edit_instruction = sample.get("edit_instruction", "")
         conditions = sample["conditions"]
         target = sample["target"]
-        image_name = Path(target).stem
+        name = image_name(sample)
 
-        target: torch.Tensor = self._load_image_tensor(os.path.join(self.image_root, target))
+        target = self._load_image_tensor(os.path.join(self.image_root, target)) if target is not None else None
 
         # Reshape conditions and target
-        target, aspect_ratio = crop_image_to_aspect_ratio(target)
-        target = reshape_to_divisible_max_resolution(target, aspect_ratio, divisible_by=self.divisible_by)
+        reference = target
+        if reference is None:
+            reference = self._load_image_tensor(os.path.join(self.image_root, conditions["source"]))
+        reference, aspect_ratio = crop_image_to_aspect_ratio(reference)
+        if target is not None:
+            target = reshape_to_divisible_max_resolution(reference, aspect_ratio, divisible_by=self.divisible_by)
 
         if isinstance(conditions, dict):
             conditions = {k: self._load_image_tensor(os.path.join(self.image_root, c)) for k, c in conditions.items()}
@@ -79,10 +83,10 @@ class MaskEditDataset(SchemaDataset):
             ]
 
         return {
-            "image_name": image_name,
+            "image_name": name,
             "prompt": self._preprocess_prompt(prompt),  # Prompt without position cues
             "negative_prompt": negative_prompt,
             "edit_instruction": edit_instruction,       # Prompt with position cues
             "conditions": self._preprocess_conditions(conditions),
-            "target": self._preprocess_target(target),
+            "target": self._preprocess_target(target) if target is not None else None,
         }

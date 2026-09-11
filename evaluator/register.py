@@ -53,6 +53,6 @@ get_metrics = _REGISTER.get_registered_methods
 
 def initialize_metrics():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    package_name = "metrics"
-    package_dir = os.path.join(base_dir, package_name)
+    package_name = "evaluator.metrics"
+    package_dir = os.path.join(base_dir, "metrics")
     _REGISTER.discover_modules(package_dir, package_name)

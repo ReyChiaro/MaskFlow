@@ -89,7 +89,9 @@ class QwenImageEditPlus(BasePipeline):
         Optional batched data keys: `negative_prompt`(list[str]), `conditions`(dict[str,Tensor])
         """
         prompt: list[str] = batch["prompt"]
-        target: torch.Tensor = batch["target"].to(self.device, dtype=self.dtype)
+        target = batch.get("target")
+        if target is not None:
+            target = target.to(self.device, dtype=self.dtype)
 
         negative_prompt: Optional[list[str]] = batch.get("negative_prompt", None)
         conditions: Optional[dict[str, torch.Tensor]] = batch.get("conditions", None)
@@ -104,11 +106,16 @@ class QwenImageEditPlus(BasePipeline):
 
         # ---------------- Preprocess ---------------- #
         # To tensor and reshape to target areas
-        h, w = target.shape[-2:]
+        reference = target if target is not None else (conditions or {}).get("source")
+        if reference is None:
+            raise ValueError("Evaluation requires a target or conditions.source for output dimensions.")
+        h, w = reference.shape[-2:]
         aspect = w / h
         w, h = calculate_dimensions(MAX_RESOLUTION, aspect)
-        target = resize_rgb(target, h, w)
-        target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
+        if target is not None:
+            target = resize_rgb(target, h, w)
+        if target is not None:
+            target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
 
         vlm_conditions = {}
         dit_conditions = {}
@@ -128,6 +135,7 @@ class QwenImageEditPlus(BasePipeline):
             vlm_conditions=vlm_conditions,
             dit_conditions=dit_conditions,
             target=target,
+            height=h, width=w,
         )
 
     def encode_prompt(
@@ -189,6 +197,8 @@ class QwenImageEditPlus(BasePipeline):
         Prepare training forward inputs.
         The sample mode for VAE is fixed to `sample`, `target` must be provided.
         """
+        if preprocessed_data.target is None:
+            raise ValueError("Training requires target images.")
         sample_mode = "sample"
 
         # Conduct CFG dropout
@@ -242,7 +252,7 @@ class QwenImageEditPlus(BasePipeline):
     ) -> QwenForwardOutput:
         r"""
         Prepare training evaluation inputs.
-        The sample mode for VAE is fixed to `argmax`, `target` must be provided.
+        The sample mode for VAE is fixed to `argmax`; source supplies size without a target.
         `text_cfg_scale` can be provided for negative_prompt encoding.
         """
         sample_mode = "argmax"
@@ -260,12 +270,12 @@ class QwenImageEditPlus(BasePipeline):
         image_shapes = []
         dit_conditions = preprocessed_data.dit_conditions
         target = preprocessed_data.target
-        height, width = target.shape[-2:]
+        height, width = target.shape[-2:] if target is not None else (preprocessed_data.height, preprocessed_data.width)
 
         # ---------------- Encode and Pack ---------------- #
         # Encode
         noise_shape = (
-            target.shape[0],
+            len(prompt),
             self.vae_channels,
             1,
             height // self.vae_scale_factor,

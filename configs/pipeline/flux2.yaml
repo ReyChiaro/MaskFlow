@@ -1,0 +1,39 @@
+_target_: pipelines.flux2.flux2.Flux2
+_recursive_: true
+
+pretrained_model: black-forest-labs/FLUX.2-dev
+max_area: 1048576
+max_condition_area: 1048576
+condition_keys: [source]
+max_sequence_length: 512
+text_encoder_out_layers: [10, 20, 30]
+# Native guidance embedding; trainer/evaluator text_cfg_scale controls optional two-pass CFG separately.
+guidance_scale: 4.0
+train_sample_mode: argmax
+rescale_cfg: false
+
+scheduler:
+  _target_: schedulers.flux2_flow_matching.Flux2FlowMatchingScheduler
+  # null loads the original scheduler config from pretrained_model/scheduler.
+  native_scheduler: null
+  weighting_scheme: logit_normal
+  logit_normal_mean: 0.0
+  logit_normal_std: 1.0
+  training_shift: 1.0
+
+fsdp_configs:
+  transformer.transformer_blocks:
+    iterable: true
+    reshard_after_forward: true
+  transformer.single_transformer_blocks:
+    iterable: true
+    reshard_after_forward: true
+  text_pipeline.text_encoder.model.language_model.layers:
+    iterable: true
+    reshard_after_forward: true
+  transformer:
+    iterable: false
+    reshard_after_forward: false
+  text_pipeline.text_encoder:
+    iterable: false
+    reshard_after_forward: false

@@ -1,0 +1,16 @@
+defaults:
+  - sft_maskflow
+  - override pipeline: flux2
+  - override adapter: flux2_lora
+  - override trainer: lora
+  - _self_
+
+project:
+  project_name: FLUX2-dev-SFT
+trainer:
+  text_cfg_scale: 1.0
+  text_cfg_dropout: 0.0
+trainset:
+  replace_prompt_placeholder_with: the specified area
+evalset:
+  replace_prompt_placeholder_with: the specified area

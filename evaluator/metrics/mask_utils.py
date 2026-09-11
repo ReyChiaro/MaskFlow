@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import torch
 
 ImageInput = torch.Tensor | list[torch.Tensor]
@@ -93,3 +95,28 @@ def mask_region_pair(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     mask = region_mask(mask, source, foreground, binary_thresh).to(dtype=source.dtype)
     return source * mask, target * mask
+
+
+class RegionalImages(Sequence):
+    """Lazily zero pixels outside a nonempty foreground/background region."""
+
+    def __init__(self, images: ImageInput, mask: ImageInput, foreground: bool):
+        if mask is None:
+            raise ValueError("Regional metrics require a mask.")
+        self.images, self.masks = image_list(images), image_list(mask)
+        self.foreground = foreground
+        if len(self.images) != len(self.masks):
+            raise ValueError("Regional metrics require one mask per image.")
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, index):
+        image, mask = self.images[index], self.masks[index]
+        if mask.shape[-2:] != image.shape[-2:]:
+            raise ValueError(f"Mask at index {index} must match image dimensions.")
+        selected = region_mask(mask.unsqueeze(0), image.unsqueeze(0), self.foreground).squeeze(0)
+        if not selected.any():
+            region = "foreground" if self.foreground else "background"
+            raise ValueError(f"Empty {region} at index {index}.")
+        return image * selected.to(image.dtype)

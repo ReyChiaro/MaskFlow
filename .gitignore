@@ -21,7 +21,7 @@ outputs/
 .DS_Store
 
 # Others
-dataset/
+dataset/*
 demo/
 evaluations/
 experiments/
@@ -29,6 +29,8 @@ figs/
 script/
 viewer/
 checkpoints/
+evaluator/docs/
+tests/
 .env
 
 *.log
