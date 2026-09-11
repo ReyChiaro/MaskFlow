@@ -26,6 +26,8 @@ class PreprocessOutput:
     vlm_conditions: list[torch.Tensor] | dict[str, torch.Tensor] | None = None
     dit_conditions: list[torch.Tensor] | dict[str, torch.Tensor] | None = None
     target: torch.Tensor | None = None
+    height: int | None = None
+    width: int | None = None
 
 
 @dataclasses.dataclass

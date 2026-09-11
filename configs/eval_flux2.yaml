@@ -1,0 +1,16 @@
+defaults:
+  - eval_maskflow
+  - override pipeline: flux2
+  - override adapter@sft_adapter: flux2_lora
+  - _self_
+
+project:
+  project_name: eval_FLUX2-dev
+# Original pretrained model by default. Set adapters.sft.path to evaluate an SFT checkpoint.
+adapters:
+  sft:
+    optional: true
+text_cfg_scale: 1.0
+eval_with_position_prompt: true
+evalset:
+  replace_prompt_placeholder_with: the specified area

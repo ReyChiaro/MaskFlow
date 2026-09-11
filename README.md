@@ -35,6 +35,7 @@
 - [Introduction](#introduction)
 - [🪄 \[New\] Editor](#-new-editor)
 - [Quick Start](#quick-start)
+- [FLUX.2-dev](#flux2-dev)
 - [Distribution Matching Distillation](#distribution-matching-distillation)
 - [Configuration reference](#configuration-reference)
 - [Visualization](#visualization)
@@ -124,6 +125,73 @@ uv run python inference.py \
 ```
 
 The base model defaults to [`Qwen/Qwen-Image-Edit-2511`](https://huggingface.co/Qwen/Qwen-Image-Edit-2511), and the output directory is created automatically.
+
+## FLUX.2-dev
+
+FLUX.2-dev uses the existing LoRA and MaskFlow trainers. The base pipeline preserves
+native text encoding, reference-image preprocessing, latent normalization, guidance
+embeddings and inference timesteps. MaskFlow adds mask conditioning, regional flow
+and loss, latent-space Poisson refinement, and optional pixel blending.
+
+Train the base model or MaskFlow with a local Diffusers checkpoint (the pipeline
+config defaults to `black-forest-labs/FLUX.2-dev`):
+
+```bash
+NPROC_PER_NODE=8 bash scripts/sft/flux2.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev
+
+NPROC_PER_NODE=8 bash scripts/sft/flux2_maskflow.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev \
+  trainer.fsdp_strategy=full_shard
+```
+
+Evaluate the base pretrained model, or load a trained MaskFlow LoRA:
+
+```bash
+NPROC_PER_NODE=8 bash scripts/eval/flux2.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev
+
+NPROC_PER_NODE=8 bash scripts/eval/flux2_maskflow.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev \
+  adapters.sft.path=/path/to/checkpoint/lora_adapter/pytorch_lora_weights.safetensors
+```
+
+The base evaluation script also accepts `adapters.sft.path` for SFT evaluation.
+Each evaluation worker loads a complete model and processes a disjoint subset of
+samples; results share one `predictions/` directory, with `mask/` for MaskFlow.
+`NPROC_PER_NODE` sets the number of visible GPUs to use; `CUDA_VISIBLE_DEVICES`
+selects them. Training supports the existing `no_shard` and `full_shard` strategies.
+
+Settings live in `configs/pipeline/flux2*.yaml`, `configs/adapter/flux2_lora.yaml`,
+and `configs/{sft,eval}_flux2*.yaml`. All scripts accept Hydra overrides, including
+`trainset.data_file`, `evalset.data_file`, and their corresponding `image_root`.
+The base pipeline uses `conditions.source`; MaskFlow uses `conditions.source` and
+`conditions.mask`. Batches retain the existing dataset schema. Keep the per-process
+batch size at 1 for images with different spatial sizes.
+
+`pipeline.guidance_scale` controls FLUX.2's native guidance embedding.
+`trainer.text_cfg_scale` (training-time evaluation) and `text_cfg_scale` (standalone
+evaluation) independently control optional two-pass CFG. Base configs set CFG to 1;
+MaskFlow configs enable text dropout and CFG. Match pipeline settings, including
+mask morphology, when evaluating a trained checkpoint.
+
+Inference uses Diffusers' step-count-dependent FLUX.2 time shift. Training uses
+`pipeline.scheduler.weighting_scheme` and `training_shift`; the latter is a positive
+rational sigma-shift factor and is independent of evaluation step count. Model
+architecture dimensions are read from the pretrained configuration.
+
+Run the small-model regression checks without downloading pretrained weights:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
+Validation covers native three-step inference equivalence, non-divisible reference
+sizes, mask layout and boundaries, regional loss, and LoRA update/save/reload/fusion.
+The integration was also exercised with temporary small FLUX.2/Mistral models through
+the actual two-GPU training scripts (`no_shard` and FSDP `full_shard`) and evaluation
+scripts, including three samples split across two workers. Full pretrained
+FLUX.2-dev image quality and memory use have not been validated locally.
 
 ## Distribution Matching Distillation
 

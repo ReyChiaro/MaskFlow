@@ -1,0 +1,9 @@
+_target_: data_module.mask_edit_dataset.MaskEditDataset
+
+image_root: dataset/ImgEdit-Benchmark
+data_file: dataset/ImgEdit-Benchmark/test.jsonl
+load_start: 0.0
+load_end: 1.0
+divisible_by: 32
+enable_prompt_truncation: false
+replace_prompt_placeholder_with: null

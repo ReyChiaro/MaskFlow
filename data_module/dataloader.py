@@ -1,6 +1,18 @@
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, default_collate
 
 from data_module.sampler import CheckpointDistributedSampler
+
+
+def collate_evaluation(batch):
+    """Keep target=None for target-free batches; retain normal tensor collation."""
+    missing = [sample.get("target", False) is None for sample in batch]
+    if any(missing):
+        if not all(missing):
+            raise ValueError("A batch mixes present and absent targets; use batch_size_per_process=1.")
+        result = default_collate([{k: v for k, v in sample.items() if k != "target"} for sample in batch])
+        result["target"] = None
+        return result
+    return default_collate(batch)
 
 
 def get_dataloader(
@@ -31,5 +43,6 @@ def get_dataloader(
         num_workers=num_workers,
         drop_last=drop_last,
         sampler=sampler,
+        collate_fn=None if is_train else collate_evaluation,
     )
     return dataloader, sampler

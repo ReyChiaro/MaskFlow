@@ -16,6 +16,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from schedulers import MaskFlowScheduler
+from pipelines import maskflow_utils
 from pipelines.base_pipeline import PreprocessOutput
 from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus, QwenForwardOutput, resize_rgb
 from data_module.utils import MAX_RESOLUTION
@@ -115,18 +116,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
     # ---------------- Mask Operations ---------------- #
     def dilate_mask(self, mask: torch.Tensor, ks: int | None = None) -> torch.Tensor:
-        ks = ks or self.mask_dilation_kernel
-        ks += 1 - ks % 2
-        padding = ks // 2
-        dilated = F.max_pool2d(mask, kernel_size=ks, padding=padding, stride=1)
-        return dilated
+        return maskflow_utils.dilate_mask(mask, ks or self.mask_dilation_kernel)
 
     def blur_mask(self, mask: torch.Tensor) -> torch.Tensor:
-        kernel_size = self.mask_blur_kernel + 1 - self.mask_blur_kernel % 2
-        blur_mask_tensor = T.gaussian_blur(mask, kernel_size=kernel_size, sigma=self.mask_blur_sigma)
-        blur_mask_tensor[mask < 1] = blur_mask_tensor[mask < 1] * 2
-        blur_mask_tensor[mask >= 1] = 1
-        return blur_mask_tensor
+        return maskflow_utils.blur_mask(mask, self.mask_blur_kernel, self.mask_blur_sigma)
 
     def encode_mask(self, mask: torch.Tensor):
         r"""
@@ -142,86 +135,17 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
     # ---------------- Poisson Operations ---------------- #
     def neighbor_sum(self, x: torch.Tensor) -> torch.Tensor:
-        B, C, H, W = x.shape
-        kernel = x.new_tensor(
-            [
-                [0.0, 1.0, 0.0],
-                [1.0, 0.0, 1.0],
-                [0.0, 1.0, 0.0],
-            ]
-        ).view(1, 1, 3, 3)
-        kernel = kernel.repeat(C, 1, 1, 1)
-        return F.conv2d(x, kernel, padding=1, groups=C)
+        return maskflow_utils.neighbor_sum(x)
 
     def neighbor_degree(self, x: torch.Tensor) -> torch.Tensor:
         ones = torch.ones_like(x)
         return self.neighbor_sum(ones)
 
-    def poisson_refine(
-        self,
-        g: torch.Tensor,
-        x_S: torch.Tensor,
-        M: torch.Tensor,
-        soft_M: torch.Tensor,
-        eps: float = 1e-6,
-        disable_progress_bar: bool = False,
-    ):
-        r"""
-        Args
-            g   (Tensor): The guidance tensor
-            x_S (Tensor): The source tensor to keep background
-            M   (Tensor): Binary mask
-            soft_M (Optional Tensor): Soften mask for blending
-        TODO: The semantic and formulas should be checked for `M` and `soft_M`
-        """
-        B, C, H, W = g.shape
-        M = M.float().expand(B, C, H, W)
-        soft_M = soft_M.float().expand(B, C, H, W)
-
-        # Initialization
-        y = M * g + (1.0 - M) * x_S
-
-        D = self.neighbor_degree(g)
-        nsum_soft_M = self.neighbor_sum(soft_M)
-
-        weight_sum = 0.5 * soft_M * D + 0.5 * nsum_soft_M
-
-        nsum_g = self.neighbor_sum(g)
-        nsum_g_soft_M = self.neighbor_sum(soft_M * g)
-        weighted_nsum_g = 0.5 * soft_M * nsum_g + 0.5 * nsum_g_soft_M
-
-        div_g = weight_sum * g - weighted_nsum_g
-
-        x_S_out = (1.0 - M) * x_S
-        nsum_x_S = self.neighbor_sum(x_S_out)
-        nsum_x_S_soft_M = self.neighbor_sum(soft_M * x_S_out)
-        soft_boundry = 0.5 * soft_M * nsum_x_S + 0.5 * nsum_x_S_soft_M
-
-        diag = weight_sum + self.poisson_lambda_e * soft_M + self.poisson_lambda_s * (1.0 - soft_M)
-
-        b = div_g + soft_boundry + self.poisson_lambda_e * soft_M * g + self.poisson_lambda_s * (1.0 - soft_M) * x_S
-
-        # Solve linear
-        for _ in tqdm(
-            range(self.poisson_num_iter),
-            desc="Solve Poisson",
-            disable=disable_progress_bar,
-        ):
-            y_in = M * y
-            nsum_y_in = self.neighbor_sum(y_in)
-            nsum_y_in_soft_M = self.neighbor_sum(soft_M * y_in)
-
-            y_next = (0.5 * soft_M * nsum_y_in + 0.5 * nsum_y_in_soft_M + b) / diag.clamp(min=eps)
-
-            # Update masked area only
-            y_next = M * y_next + (1.0 - M) * x_S
-
-            y = self.poisson_momentum * y + (1.0 - self.poisson_momentum) * y_next
-
-        if soft_M is not None:
-            soft_M = soft_M.expand_as(g)
-            y = soft_M * y + (1.0 - soft_M) * x_S
-        return y
+    def poisson_refine(self, g, x_S, M, soft_M, eps=1e-6, disable_progress_bar=False):
+        return maskflow_utils.poisson_refine(
+            g, x_S, M, soft_M, self.poisson_lambda_e, self.poisson_lambda_s,
+            self.poisson_num_iter, self.poisson_momentum, eps, disable_progress_bar,
+        )
 
     # ---------------- Pipeline Operations ---------------- #
     def preprocess_inputs(self, batch: dict[str, Any]) -> QwenMaskFlowPreprocessOutput:
@@ -229,7 +153,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         A batched data is supposed to have keys `prompt`, `target`.
         """
         prompt: list[str] = batch["prompt"]
-        target: torch.Tensor = batch["target"].to(self.device, dtype=self.dtype)
+        target = batch.get("target")
+        if target is not None:
+            target = target.to(self.device, dtype=self.dtype)
 
         negative_prompt: Optional[list[str]] = batch.get("negative_prompt", None)
         conditions: Optional[dict[str, torch.Tensor]] = batch.get("conditions", None)
@@ -245,10 +171,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         # Resize all spatial inputs first.
         # masks use nearest-neighbor so their boundaries stay discrete.
-        h, w = target.shape[-2:]
+        h, w = (target if target is not None else source).shape[-2:]
         aspect = w / h
         w, h = calculate_dimensions(MAX_RESOLUTION, aspect)
-        target = resize_rgb(target, h, w)
+        if target is not None:
+            target = resize_rgb(target, h, w)
         source = resize_rgb(source, h, w)
         mask = F.interpolate(mask, size=(h, w), mode="nearest")
 
@@ -259,7 +186,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         if self.mask_blur_kernel > 0:
             mask = self.blur_mask(mask)
 
-        target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
+        if target is not None:
+            target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
 
         cw, ch = calculate_dimensions(CONDITION_IMAGE_SIZE, aspect)
         vlm_conditions = {
@@ -284,6 +212,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             vlm_conditions=vlm_conditions,
             dit_conditions=dit_conditions,
             target=target,
+            height=h, width=w,
             raw_source=raw_source,
             mask=mask,
             # mask_cfg_dropped=bool(batch.get("mask_cfg_dropped", False)),
@@ -294,6 +223,8 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         Prepare training forward inputs.
         The sample mode for VAE is fixed to `sample`, `target` must be provided.
         """
+        if preprocessed_data.target is None:
+            raise ValueError("Training requires target images.")
         sample_mode = "sample"
 
         if getattr(preprocessed_data, "mask", None) is None:
@@ -398,7 +329,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     ) -> QwenMaskFlowForwardOutput:
         r"""
         Prepare training evaluation inputs.
-        The sample mode for VAE is fixed to `argmax`, `target` must be provided.
+        The sample mode for VAE is fixed to `argmax`; source supplies size without a target.
         """
         sample_mode = "argmax"
 
@@ -445,11 +376,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         dit_conditions = preprocessed_data.dit_conditions
         target = preprocessed_data.target
         mask = preprocessed_data.mask
-        height, width = target.shape[-2:]
+        height, width = target.shape[-2:] if target is not None else (preprocessed_data.height, preprocessed_data.width)
 
         # ---------------- Encode and Pack ---------------- #
         noise_shape = (
-            target.shape[0],
+            len(prompt),
             self.vae_channels,
             1,
             height // self.vae_scale_factor,

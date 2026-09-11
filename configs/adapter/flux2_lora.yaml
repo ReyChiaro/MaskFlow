@@ -1,0 +1,7 @@
+r: 256
+lora_alpha: 256
+lora_dropout: 0
+adapter_name: maskflow
+# A regex distinguishes the double-stream ModuleList (to_out.0) from the
+# single-stream Linear (to_out), and covers every block without fixed indices.
+target_modules: '(transformer_blocks\.[0-9]+\.attn\.(to_q|to_k|to_v|to_out\.0|add_q_proj|add_k_proj|add_v_proj|to_add_out)|single_transformer_blocks\.[0-9]+\.attn\.(to_qkv_mlp_proj|to_out))'

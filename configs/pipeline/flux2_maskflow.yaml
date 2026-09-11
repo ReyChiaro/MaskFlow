@@ -1,0 +1,25 @@
+defaults:
+  - flux2
+  - _self_
+
+_target_: pipelines.flux2.flux2_maskflow.Flux2MaskFlow
+condition_keys: [source, mask]
+rescale_cfg: true
+
+mask_dilation_kernel: 25
+mask_blur_kernel: 25
+mask_blur_sigma: 25.0
+mask_loss_weight: 1.0
+enable_masked_loss: true
+enable_pixel_blend: true
+enable_poisson_train: true
+enable_poisson_infer: true
+poisson_steps: [0.0, 1.0]
+poisson_lambda_e: 1.0
+poisson_lambda_s: 1.0
+poisson_num_iter: 50
+poisson_momentum: 0.1
+
+scheduler:
+  _target_: schedulers.flux2_flow_matching.Flux2MaskFlowScheduler
+  unmask_with: noisy_source

@@ -23,7 +23,7 @@ def add_trainable_lora(
         lora_alpha=cfgs.lora_alpha,
         lora_dropout=cfgs.lora_dropout,
         bias="none",
-        target_modules=list(cfgs.target_modules),
+        target_modules=cfgs.target_modules if isinstance(cfgs.target_modules, str) else list(cfgs.target_modules),
     )
 
     transformer.requires_grad_(False)
