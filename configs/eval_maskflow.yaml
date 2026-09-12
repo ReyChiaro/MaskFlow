@@ -23,6 +23,8 @@ batch_size_per_process: 1
 num_workers: 4
 
 text_cfg_scale: 4.0
+mask_cfg_scale: 1.0
+interaction_cfg_scale: null
 num_inference_steps: 50
 eval_with_position_prompt: false
 

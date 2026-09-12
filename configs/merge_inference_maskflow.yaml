@@ -5,8 +5,8 @@ input:
   negative_prompt: ""
 
 checkpoint:
-  path: ???  # Training export directory: .../lora_adapter
-  adapter_name: maskflow
+  sft_path: ???  # Training export directory: .../lora_adapter
+  sft_adapter_name: maskflow
 
 runtime:
   device: cuda
@@ -14,13 +14,14 @@ runtime:
   seed: 42
   num_inference_steps: 50
   text_cfg_scale: 4.0
-  mask_cfg_scale: 4.0
+  mask_cfg_scale: 1.0
+  interaction_cfg_scale: null
 
 output:
   path: outputs/inference/${now:%Y%m%d-%H%M%S}/result.png
 
 pipeline:
-  _target_: pipelines.qwenimage.qwenimage_mask_flow.QwenImageMaskFlow
+  _target_: pipelines.qwenimage.qwenimage_maskflow.QwenImageMaskFlow
   _recursive_: true
   pretrained_model: Qwen/Qwen-Image-Edit-2511
 
@@ -28,12 +29,7 @@ pipeline:
   mask_blur_kernel: 25
   mask_blur_sigma: 25.0
 
-  cfg_type: condition_weighted
-  mask_cfg_null_type: "null"
-  enable_mask_cfg_gating: false
-
-  enable_local_denoise_infer: false
-  local_denoise_steps: [0.0, 1.0]
+  rescale_cfg: true
   enable_pixel_blend: true
 
   enable_poisson_infer: true

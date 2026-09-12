@@ -124,6 +124,11 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
 
     # -------- Evaluation Preparation -------- #
     text_cfg_scale = cfgs.text_cfg_scale
+    cfg_kwargs = {}
+    if cfgs.get("mask_cfg_scale", 1.0) != 1.0:
+        cfg_kwargs["mask_cfg_scale"] = cfgs.mask_cfg_scale
+    if cfgs.get("interaction_cfg_scale") is not None:
+        cfg_kwargs["interaction_cfg_scale"] = cfgs.interaction_cfg_scale
     num_inference_steps = cfgs.num_inference_steps
     eval_with_position_prompt = cfgs.eval_with_position_prompt
 
@@ -134,6 +139,7 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
             batch,
             num_inference_steps=num_inference_steps,
             text_cfg_scale=text_cfg_scale,
+            **cfg_kwargs,
         )
         for i, image_name in enumerate(batch["image_name"]):
             extension = "png" if batch.get("target", False) is None else "jpg"

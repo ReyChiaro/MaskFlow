@@ -9,6 +9,7 @@ from trainer.base_trainer import BaseTrainer
 from trainer.lora_utils import add_trainable_lora, save_lora_adapter
 from trainer.parallel.utils import wait_for_everyone
 from trainer.prompt_sampler.prompt_sampler import PromptSampler
+from pipelines.cfg import training_probabilities
 
 
 @dataclasses.dataclass
@@ -57,7 +58,16 @@ class MaskFlowTrainer(LoraTrainer):
 
     prompt_sampler_cfgs: OmegaConf = None
 
+    # CFG
+    mask_cfg_dropout: float = 0.0
+    cfg_branch_probabilities: dict[str, float] | None = None
+    mask_cfg_scale: float = 1.0
+    interaction_cfg_scale: float | None = None
+
     def __post_init__(self):
+        self.cfg_branch_probabilities = training_probabilities(
+            self.cfg_branch_probabilities, self.text_cfg_dropout, self.mask_cfg_dropout
+        )
         super().__post_init__()
         self.prompt_sampler = PromptSampler(**self.prompt_sampler_cfgs)
 
@@ -67,11 +77,17 @@ class MaskFlowTrainer(LoraTrainer):
             tuple(zip(batch["edit_instruction"], batch["prompt"])),
             step,
         )
+        batch["prompt"] = runtime_prompt
 
-        # Handle the CFG dropout
-        dropout_sample = self.rng.random()
-        if dropout_sample < self.text_cfg_dropout:
-            batch["prompt"] = ["" for _ in runtime_prompt]
+        # A batch shares one condition layout. Keep the original mask and prompt;
+        # the pipeline applies this selection only to model-visible conditions.
+        draw = self.rng.random() * sum(self.cfg_branch_probabilities.values())
+        cumulative = 0.0
+        for branch, probability in self.cfg_branch_probabilities.items():
+            cumulative += probability
+            if draw < cumulative:
+                break
+        batch["cfg_branch"] = branch
         return batch
 
     def preprocess_eval_batch(self, batch, step: int):
@@ -106,6 +122,8 @@ class MaskFlowTrainer(LoraTrainer):
                     batch=batch,
                     num_inference_steps=self.num_inference_steps,
                     text_cfg_scale=self.text_cfg_scale,
+                    mask_cfg_scale=self.mask_cfg_scale,
+                    interaction_cfg_scale=self.interaction_cfg_scale,
                 )
                 self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 
