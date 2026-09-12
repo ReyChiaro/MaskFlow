@@ -1,0 +1,65 @@
+_target_: trainer.diffusion_nft.DiffusionNFTTrainer
+_recursive_: false
+
+pipe_configs: ${pipeline}
+optimizer_configs: ${optimizer}
+train_data_configs: ${trainset}
+eval_data_configs: ${evalset}
+lora_configs: ${adapter}
+lr_scheduler_configs: ${oc.select:lr_scheduler,null}
+reward_configs: ${reward}
+
+# Optional SFT endpoint to merge before mounting NFT LoRA. The merged endpoint
+# also initializes the frozen reference. null trains from the pipeline base.
+sft_lora_path: null
+sft_lora_scale: 1.0
+sft_adapter_name: maskflow
+
+# B distinct editing inputs per rank, K independent endpoints per input.
+# A group includes source/mask/prompt identity and stays entirely on one rank.
+batch_size_per_process: 1
+group_size: 4
+data_loader_workers: 8
+# R data batches collected with fixed old weights before any actor training.
+rollout_batches_per_round: 1
+inner_epochs: 1
+# G endpoint micro-batches per optimizer update; T backwards per micro-batch.
+# Effective full update batch = world_size * B * G endpoints (not multiplied by T).
+gradient_accumulation_steps: 4
+train_timesteps: 9
+num_inference_steps: 10
+# Same CFG velocity is used by actor, old and reference; Poisson is rollout-only.
+text_cfg_scale: 1.0
+text_cfg_dropout: 0.0
+
+nft_beta: 1.0
+reference_weight: 1.0e-4
+advantage_clip: 5.0
+global_reward_std: true
+advantage_epsilon: 1.0e-4
+reconstruction_epsilon: 1.0e-5
+# Once per completed rollout round: old <- d*old + (1-d)*actor.
+# This averages LoRA factors, not dense delta weights. 0=hard copy, 1=never move.
+old_decay: 0.5
+
+base_seed: 42
+output_dir: ${project.output_dir}
+checkpoint_dir: ${project.checkpoint_dir}
+evaluation_dir: ${project.evaluation_dir}
+log_dir: ${project.log_dir}
+resume_from: null
+enable_save_optimizer: true
+nft_state_dict_dir: nft
+
+# global_step/max_training_steps count actor optimizer updates only.
+# Checkpoints are deferred to round boundaries; partial accumulation is averaged
+# by its actual size. At the step limit, unused endpoints are discarded.
+max_training_steps: 100
+save_steps: 50
+eval_steps: 50
+max_grad_norm: 1.0
+mixed_precision: bf16  # bf16 | no (fp32); fp16 is rejected explicitly.
+enable_gradient_checkpoint: true
+cudnn_deterministic: false
+cudnn_benchmark: true
+fsdp_strategy: full_shard  # no_shard uses explicit gradient averaging across ranks.

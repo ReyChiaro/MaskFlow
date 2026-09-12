@@ -1,0 +1,18 @@
+_target_: models.rewards.rewards.Rewards
+_recursive_: false
+
+models:
+  clip:
+    weight: 1.0
+    model:
+      _target_: models.rewards.clip.CLIPReward
+      pretrained_model: openai/clip-vit-large-patch14-336
+      batch_size: 8
+      prompt_key: prompt
+  dinov2:
+    weight: 1.0
+    model:
+      _target_: models.rewards.dinov2.DINOv2Reward
+      pretrained_model: facebook/dinov2-large
+      batch_size: 8
+      reference: source  # source preservation; use target for a paired target reward.

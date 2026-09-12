@@ -37,6 +37,7 @@
 - [Quick Start](#quick-start)
 - [FLUX.2-dev](#flux2-dev)
 - [Distribution Matching Distillation](#distribution-matching-distillation)
+- [Diffusion NFT](#diffusion-nft)
 - [Configuration reference](#configuration-reference)
 - [Visualization](#visualization)
 - [License](#license)
@@ -219,6 +220,64 @@ To use local files, pass the two `.safetensors` paths and leave the correspondin
 checkpoint.sft_path=/absolute/path/to/maskflow-SEC.safetensors \
 checkpoint.dmd_path=/absolute/path/to/maskflow-SEC-tcfg4-step8.safetensors
 ```
+
+## Diffusion NFT
+
+`trainer/diffusion_nft.py` implements online NFT for **QwenImageMaskFlow with
+LoRA**, using the existing MaskFlow scheduler, conditional encoding and Poisson
+rollout refinement. It does not support the FLUX.2 pipeline or full-parameter
+finetuning. Configure the dataset/model paths, then run:
+
+```bash
+uv run torchrun --standalone --nproc_per_node=8 finetune.py --config-name=train_nft \
+  trainer.sft_lora_path=/absolute/path/to/maskflow.safetensors
+```
+
+Use `trainer.fsdp_strategy=no_shard` for replicated models, or `full_shard` for
+FSDP2. SFT weights are merged before mounting the NFT adapter. Actor, old and
+reference share one frozen backbone; old/reference store detached LoRA factor
+snapshots. FSDP switches discard cached full parameters before copying matching
+shards. Actor weights stay in place from its forward through backward. The
+reference remains at initialization; old is updated once per rollout round by
+`old_decay * old + (1-old_decay) * actor`.
+
+The counters and batch sizes in `configs/trainer/diffusion_nft.yaml` mean:
+
+| Setting / counter | Meaning |
+|---|---|
+| `batch_size_per_process` (`B`) | Distinct editing inputs per rank; incomplete dataset batches are dropped |
+| `group_size` (`K`) | Independently generated images for the same prompt/source/mask; the whole group stays on one rank |
+| `rollout_batches_per_round` (`R`) | Data batches collected with fixed old weights before training |
+| `gradient_accumulation_steps` (`G`) | Endpoint micro-batches per actor optimizer update |
+| `train_timesteps` (`T`) | Grid times per endpoint micro-batch, with fresh noise at each time |
+| `micro_step` | Endpoint micro-batches trained, including inner-epoch reuse |
+| `global_step` | Actor optimizer updates; also controls the LR scheduler and stopping limit |
+| `rollout_step` | Completed rollout/train/old-sync rounds |
+
+A full optimizer update uses `world_size * B * G` endpoints and `G*T` backward
+calls per rank. A full round makes `inner_epochs * ceil(R*K/G)` updates. Smaller
+tail accumulations divide by their actual size. The step limit may end a round
+early and discard unused endpoints. Checkpoints/evaluation are deferred to the
+round boundary when their interval is crossed. Resume preserves old/reference,
+optimizer (when enabled), LR scheduler, consumed data cursor and per-rank training
+RNG; use the same world size and training configuration. Rollout caches are not
+saved. Final NFT adapter export is in `step-N/lora_adapter`; it requires the same
+SFT endpoint at inference if one was merged during training.
+
+Rewards use `models/rewards/rewards.py::RewardModel`: `__call__(images, batch)`
+returns one finite score per image, with larger scores preferred. `Rewards`
+combines configured models by weighted sum without averaging across images.
+`CLIPReward` measures image/text cosine alignment; `DINOv2Reward` measures image
+CLS cosine similarity to a configured source or paired target. Their checkpoint
+paths, inference batch sizes, prompt/reference selection and weights are exposed
+under `configs/reward`. Select `reward=clip_dinov2` for both models. New rewards
+subclass `RewardModel` inside `models/rewards` and are selected by Hydra target.
+
+Group-centered rewards determine the NFT positive/negative reconstruction
+weights. Re-noising uses the MaskFlow scheduler, including its source/mask
+endpoint outside the edit region. The reference penalty is velocity MSE.
+This implementation requires reward scores; it does not assign arbitrary
+directions when rewards are absent.
 
 <details>
 <summary>Configuration reference</summary>
