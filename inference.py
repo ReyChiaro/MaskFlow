@@ -1,6 +1,5 @@
 import hydra
 import torch
-import argparse
 import torchvision.transforms.functional as T
 
 from pathlib import Path
@@ -10,19 +9,6 @@ from omegaconf import DictConfig
 from PIL import Image
 
 from trainer.lora_utils import load_inference_loras
-
-
-def parse_args():
-    parser = argparse.ArgumentParser("Pipeline Inference Interface")
-
-    # -------- Pipeline Configs -------- #
-    parser.add_argument("--model", type=str, help="Base model name or weights path.")
-    parser.add_argument("--model-config", type=str, help="Config file (yaml) to init model.")
-
-    # -------- Generation Configs -------- #
-    parser.add_argument("--batched")
-
-    return parser.parse_args()
 
 
 def load_image(path: str) -> torch.Tensor:
@@ -46,6 +32,8 @@ def build_pipeline(cfg: DictConfig, device: torch.device, dtype: torch.dtype):
     return pipeline
 
 
+@hydra.main(version_base=None, config_path="configs", config_name="inference")
+@torch.inference_mode()
 def main(cfg: DictConfig) -> None:
     device = torch.device(cfg.runtime.device)
     dtype = getattr(torch, cfg.runtime.dtype)
@@ -53,7 +41,14 @@ def main(cfg: DictConfig) -> None:
 
     source = load_image(cfg.input.source)
     mask = load_image(cfg.input.mask)
-    result = pipeline.generate()
+    result = pipeline.eval_step(
+        {"prompt": [cfg.input.prompt], "negative_prompt": [cfg.input.get("negative_prompt", "")],
+         "conditions": {"source": source, "mask": mask}},
+        num_inference_steps=cfg.runtime.num_inference_steps,
+        text_cfg_scale=cfg.runtime.text_cfg_scale,
+        mask_cfg_scale=cfg.runtime.get("mask_cfg_scale", 1.0),
+        interaction_cfg_scale=cfg.runtime.get("interaction_cfg_scale"),
+    )
 
     output_path = Path(cfg.output.path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

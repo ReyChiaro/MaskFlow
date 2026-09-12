@@ -238,16 +238,16 @@ class Flux2(BasePipeline):
         return {"output": output}
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps=50, text_cfg_scale=1.0):
+    def eval_step(self, batch, num_inference_steps=50, text_cfg_scale=1.0, **cfg_kwargs):
         data = self.preprocess_inputs(batch)
-        inputs = self.prepare_eval_inputs(data, text_cfg_scale)
+        inputs = self.prepare_eval_inputs(data, text_cfg_scale, **cfg_kwargs)
         xt = inputs.noised_target if inputs.noised_target is not None else inputs.noise
         with self.scheduler.inference(num_inference_steps, xt.shape[1]) as inferencer:
             for timestep, sigma, next_sigma, derivative in tqdm(inferencer, total=num_inference_steps):
                 timestep, sigma, next_sigma, derivative = [
                     value.to(self.device) for value in (timestep, sigma, next_sigma, derivative)
                 ]
-                prediction = self.predict_velocity(xt, timestep, inputs, text_cfg_scale)
+                prediction = self.predict_velocity(xt, timestep, inputs, text_cfg_scale, **cfg_kwargs)
                 xt = self.inference_step(xt, prediction, sigma, next_sigma, derivative, inputs)
         output = self.decode_image(Flux2Pipeline._unpack_latents_with_ids(xt, inputs.latent_ids))
         return self.postprocess_output(output, data)
@@ -256,6 +256,7 @@ class Flux2(BasePipeline):
     def generate(
         self, prompt, source_image: Image.Image | None = None, mask_image: Image.Image | None = None,
         negative_prompt="", height=None, width=None, num_inference_steps=50, text_cfg_scale=1.0,
+        **cfg_kwargs,
     ):
         conditions = {}
         for key, image in (("source", source_image), ("mask", mask_image)):
@@ -270,4 +271,4 @@ class Flux2(BasePipeline):
             "prompt": [prompt], "negative_prompt": [negative_prompt], "conditions": conditions,
             "target": torch.zeros(1, self.vae.config.in_channels, height, width),
         }
-        return self.eval_step(batch, num_inference_steps, text_cfg_scale)
+        return self.eval_step(batch, num_inference_steps, text_cfg_scale, **cfg_kwargs)

@@ -18,7 +18,16 @@ log_dir: ${project.log_dir}
 resume_from: ""
 
 text_cfg_scale: 4.0
+mask_cfg_scale: 1.0
+interaction_cfg_scale: null  # null uses the text scale for the interaction term.
 text_cfg_dropout: 0.1
+# Explicit probabilities override text_cfg_dropout and mask_cfg_dropout.
+# Set to null to use the legacy dropout rates instead.
+cfg_branch_probabilities:
+  pm: 0.7
+  pn: 0.1
+  nm: 0.1
+  nn: 0.1
 
 max_grad_norm: 1.0
 max_training_steps: 5000

@@ -17,6 +17,7 @@ from loguru import logger
 
 from schedulers import MaskFlowScheduler
 from pipelines import maskflow_utils
+from pipelines.cfg import branch_conditions, required_branches, combine_predictions
 from pipelines.base_pipeline import PreprocessOutput
 from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus, QwenForwardOutput, resize_rgb
 from data_module.utils import MAX_RESOLUTION
@@ -27,6 +28,7 @@ class QwenMaskFlowPreprocessOutput(PreprocessOutput):
 
     raw_source: torch.Tensor | None = None
     mask: torch.Tensor | None = None
+    cfg_branch: str = "pm"
 
 
 @dataclasses.dataclass
@@ -48,6 +50,8 @@ class QwenMaskFlowForwardOutput(QwenForwardOutput):
     """
 
     loss_weights: torch.Tensor | None = None
+    source_latents: torch.Tensor | None = None
+    cfg_branch: str = "pm"
 
     # Mask and edge latents that are ``encoded'' by interpolation rather than VAE.
     mask_latents: torch.Tensor | None = None
@@ -82,6 +86,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
     mask_loss_weight: float = 1.0
     enable_masked_loss: bool = True
+    rescale_cfg: bool = True
     enable_pixel_blend: bool = True
 
     enable_poisson_train: bool = True
@@ -95,13 +100,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     def __post_init__(self):
         super().__post_init__()
 
-    # ---------------- Mask Operations ---------------- #
-    def dilate_mask(self, mask: torch.Tensor, ks: int | None = None) -> torch.Tensor:
-        return maskflow_utils.dilate_mask(mask, ks or self.mask_dilation_kernel)
-
-    def blur_mask(self, mask: torch.Tensor) -> torch.Tensor:
-        return maskflow_utils.blur_mask(mask, self.mask_blur_kernel, self.mask_blur_sigma)
-
+    # ---------------- Mask Encoding ---------------- #
     def encode_mask(self, mask: torch.Tensor):
         r"""
         Mimic VAE for mask, conduct 8x downsample on mask and pack to 3D tensor.
@@ -113,20 +112,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         mask = F.interpolate(mask, [h // self.vae_scale_factor, w // self.vae_scale_factor], mode="nearest")
         mask = mask.mean(dim=1, keepdim=True).repeat(1, self.vae_channels, 1, 1).unsqueeze(2)
         return mask.clamp(0, 1)
-
-    # ---------------- Poisson Operations ---------------- #
-    def neighbor_sum(self, x: torch.Tensor) -> torch.Tensor:
-        return maskflow_utils.neighbor_sum(x)
-
-    def neighbor_degree(self, x: torch.Tensor) -> torch.Tensor:
-        ones = torch.ones_like(x)
-        return self.neighbor_sum(ones)
-
-    def poisson_refine(self, g, x_S, M, soft_M, eps=1e-6, disable_progress_bar=False):
-        return maskflow_utils.poisson_refine(
-            g, x_S, M, soft_M, self.poisson_lambda_e, self.poisson_lambda_s,
-            self.poisson_num_iter, self.poisson_momentum, eps, disable_progress_bar,
-        )
 
     # ---------------- Pipeline Operations ---------------- #
     def preprocess_inputs(self, batch: dict[str, Any]) -> QwenMaskFlowPreprocessOutput:
@@ -163,9 +148,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         # Apply morphology at model resolution so kernel sizes do not depend on
         # the uploaded image resolution.
         if self.mask_dilation_kernel > 0:
-            mask = self.dilate_mask(mask, self.mask_dilation_kernel)
+            mask = maskflow_utils.dilate_mask(mask, self.mask_dilation_kernel)
         if self.mask_blur_kernel > 0:
-            mask = self.blur_mask(mask)
+            mask = maskflow_utils.blur_mask(mask, self.mask_blur_kernel, self.mask_blur_sigma)
 
         if target is not None:
             target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
@@ -193,9 +178,11 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             vlm_conditions=vlm_conditions,
             dit_conditions=dit_conditions,
             target=target,
-            height=h, width=w,
+            height=h,
+            width=w,
             raw_source=raw_source,
             mask=mask,
+            cfg_branch=batch.get("cfg_branch", "pm"),
         )
 
     def prepare_forward_inputs(self, preprocessed_data: QwenMaskFlowPreprocessOutput) -> QwenMaskFlowForwardOutput:
@@ -213,13 +200,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             )
             return super().prepare_forward_inputs(preprocessed_data)
 
-        # ---------------- Encode Prompts ---------------- #
-        prompt = preprocessed_data.prompt
-        vlm_conditions = preprocessed_data.vlm_conditions
         dit_conditions = preprocessed_data.dit_conditions
-
-        # TODO: There must be a more elegant way to implement CFG
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, vlm_conditions)
 
         image_shapes = []
         target = preprocessed_data.target
@@ -244,11 +225,15 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         # paste the backgrounds from source images to the targets
         if self.enable_poisson_train:
             tgt_dtype = tgt.dtype
-            tgt = self.poisson_refine(
+            tgt = maskflow_utils.poisson_refine(
                 g=tgt.squeeze(2),
                 x_S=conds[0].squeeze(2),
                 M=mask_latents.squeeze(2) > 0,  # 1 for masked regions to be edited
                 soft_M=mask_latents.squeeze(2),
+                poisson_lambda_e=self.poisson_lambda_e,
+                poisson_lambda_s=self.poisson_lambda_s,
+                poisson_num_iter=self.poisson_num_iter,
+                poisson_momentum=self.poisson_momentum,
                 disable_progress_bar=True,
             )
             tgt = tgt.unsqueeze(2).to(dtype=tgt_dtype)
@@ -272,16 +257,19 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         # --------------- Sample and Add Noise -------------- #
         source = cond_latents[0]
-        noise = torch.randn_like(tgt, generator=self.generator)
+        noise = torch.randn(tgt.shape, generator=self.generator, device=tgt.device, dtype=tgt.dtype)
         ts = self.scheduler.sample_timesteps(tgt.shape[0], self.generator, self.device)
         sigmas = self.scheduler.get_sigmas(ts, img_seq_len=tgt.shape[1])
 
         xt = self.scheduler.add_noise_by_sigmas(noise, tgt, sigmas, source, mask_latents)
         gt = self.scheduler.get_velocity(noise, tgt, source, mask_latents)
 
+        branch = self.build_cfg_branch(
+            preprocessed_data, preprocessed_data.cfg_branch, cond_latents, image_shapes, training=True
+        )
         return QwenMaskFlowForwardOutput(
-            prompt_embeds=prompt_embeds,
-            prompt_embeds_mask=prompt_embeds_mask,
+            prompt_embeds=branch.prompt_embeds,
+            prompt_embeds_mask=branch.prompt_embeds_mask,
             height=height,
             width=width,
             noise=noise,
@@ -289,16 +277,37 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             timesteps=sigmas,  # Qwen use sigma-based denoise
             sigmas=sigmas,
             ground_truth=gt,
-            conditions=cond_latents,
-            image_shapes=image_shapes,
+            conditions=branch.conditions,
+            image_shapes=branch.image_shapes,
+            source_latents=source,
+            cfg_branch=preprocessed_data.cfg_branch,
             mask_latents=mask_latents,
             mask_ratio=mask_ratio,
+        )
+
+    def build_cfg_branch(self, data, name, conditions, image_shapes, training=False):
+        keep_text, keep_mask = branch_conditions(name)
+        prompt = (
+            data.prompt
+            if keep_text
+            else ([""] * len(data.prompt) if training else data.negative_prompt or [""] * len(data.prompt))
+        )
+        vlm_conditions = {key: value for key, value in data.vlm_conditions.items() if keep_mask or key != "mask"}
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, vlm_conditions)
+        # The image shape list contains the generated image, source, then mask.
+        return QwenMaskFlowCFGBranch(
+            prompt_embeds=prompt_embeds,
+            prompt_embeds_mask=prompt_embeds_mask,
+            conditions=conditions if keep_mask else conditions[:1],
+            image_shapes=image_shapes if keep_mask else [shapes[:2] for shapes in image_shapes],
         )
 
     def prepare_eval_inputs(
         self,
         preprocessed_data: QwenMaskFlowPreprocessOutput,
         text_cfg_scale: float = 1.0,
+        mask_cfg_scale: float = 1.0,
+        interaction_cfg_scale: float | None = None,
     ) -> QwenMaskFlowForwardOutput:
         r"""
         Prepare training evaluation inputs.
@@ -313,14 +322,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             return super().prepare_eval_inputs(preprocessed_data, text_cfg_scale)
 
         prompt = preprocessed_data.prompt
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, preprocessed_data.vlm_conditions)
-
-        text_cfg_enabled = text_cfg_scale > 1.0
-        neg_prompt_embeds, neg_prompt_embeds_mask = None, None
-        if text_cfg_enabled:
-            neg_prompt_embeds, neg_prompt_embeds_mask = self.encode_prompt(
-                preprocessed_data.negative_prompt, preprocessed_data.vlm_conditions
-            )
 
         image_shapes = []
         dit_conditions = preprocessed_data.dit_conditions
@@ -358,27 +359,15 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         )
 
         cfg_branches = {
-            # Positive prompt and mask
-            "pm": QwenMaskFlowCFGBranch(
-                prompt_embeds=prompt_embeds,
-                prompt_embeds_mask=prompt_embeds_mask,
-                conditions=cond_latents,
-                image_shapes=image_shapes,
-            )
+            name: self.build_cfg_branch(preprocessed_data, name, cond_latents, image_shapes)
+            for name in required_branches(text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, self.rescale_cfg)
         }
-        if text_cfg_enabled:
-            # Negative prompt and mask
-            cfg_branches["nm"] = QwenMaskFlowCFGBranch(
-                prompt_embeds=neg_prompt_embeds,
-                prompt_embeds_mask=neg_prompt_embeds_mask,
-                conditions=cond_latents,
-                image_shapes=image_shapes,
-            )
         return QwenMaskFlowForwardOutput(
             height=height,
             width=width,
             noise=noise,
             conditions=cond_latents,
+            source_latents=cond_latents[0],
             mask_latents=mask_latents,
             cfg_branches=cfg_branches,
         )
@@ -419,7 +408,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             mask_ratio    (Tensor): Masked area / image area.
                 Used to zoom the masked loss weights adaptively during training.
             mask_latents  (Tensor): The reshaped/VAE encoded softened binary masks.
-            edge_latents  (Tensor): The reshaped/VAE encoded softened binary edges.
 
         Return
             dict[str, Tensor]: The dict of different types losses.
@@ -444,6 +432,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         # and resize or conduct other augmentation on them.
         preprocessed_data = self.preprocess_inputs(batch)
 
+        if getattr(preprocessed_data, "mask", None) is None:
+            return super().forward_step(batch)
+
         # `prepare_forward_inputs` encodes all prompts and images into latents,
         # `MaskFlow` will additionally conduct Poisson replace on the target images.
         model_inputs = self.prepare_forward_inputs(preprocessed_data)
@@ -462,24 +453,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             predictions=predictions,
             ground_truths=model_inputs.ground_truth,
             mask_ratio=model_inputs.mask_ratio,
-            mask_latents=model_inputs.mask_latents,
+            mask_latents=(model_inputs.mask_latents if branch_conditions(model_inputs.cfg_branch)[1] else None),
         )
         return loss
-
-    def combine_cfg_predictions(
-        self,
-        branch_predictions: dict[str, torch.Tensor],
-        text_cfg_scale: float = 1.0,
-    ) -> torch.Tensor:
-        cfg_outputs = branch_predictions["pm"]
-        pos_norm = torch.norm(branch_predictions["pm"], dim=-1, keepdim=True).clamp(1e-6)
-
-        # Negative prompt with mask
-        if "nm" in branch_predictions:
-            cfg_outputs = branch_predictions["nm"] + text_cfg_scale * (cfg_outputs - branch_predictions["nm"])
-
-        cfg_norm = torch.norm(cfg_outputs, dim=-1, keepdim=True).clamp(1e-6)
-        return (pos_norm / cfg_norm) * cfg_outputs
 
     def apply_poisson_to_prediction(
         self,
@@ -504,11 +480,15 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         x0_pred = self.scheduler.predict_x0(xt, curr_sigma, d_sigma_dt, pred, source, mask_latents, noise)
         x0_dtype = x0_pred.dtype
         x0_pred = QwenImageEditPlusPipeline._unpack_latents(x0_pred, height, width, self.vae_scale_factor).squeeze(2)
-        x0_refined = self.poisson_refine(
+        x0_refined = maskflow_utils.poisson_refine(
             g=x0_pred,
             x_S=x_S,
             M=soft_M > 0,
             soft_M=soft_M,
+            poisson_lambda_e=self.poisson_lambda_e,
+            poisson_lambda_s=self.poisson_lambda_s,
+            poisson_num_iter=self.poisson_num_iter,
+            poisson_momentum=self.poisson_momentum,
             disable_progress_bar=disable_progress_bar,
         )
         x0_refined = QwenImageEditPlusPipeline._pack_latents(
@@ -528,17 +508,25 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         batch,
         num_inference_steps: int = 50,
         text_cfg_scale: float = 1.0,
-    ) -> list[torch.Tensor]:
+        mask_cfg_scale: float = 1.0,
+        interaction_cfg_scale: float | None = None,
+    ) -> dict[str, torch.Tensor]:
         r"""
         Evaluation step is used for batched sample evaluation, especially on benchmarks or testsets.
         """
         # As the batch share the same structure with training batch, we use the same extraction method as train.
         preprocessed_data = self.preprocess_inputs(batch)
-        model_inputs = self.prepare_eval_inputs(preprocessed_data, text_cfg_scale)  # , mask_cfg_scale)
+        if getattr(preprocessed_data, "mask", None) is None:
+            if mask_cfg_scale != 1.0 or interaction_cfg_scale is not None:
+                raise ValueError("Mask CFG requires source and mask inputs.")
+            return super().eval_step(batch, num_inference_steps, text_cfg_scale)
+        model_inputs = self.prepare_eval_inputs(
+            preprocessed_data, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale
+        )
         xt = model_inputs.noise
         mask = preprocessed_data.mask
         raw_source = preprocessed_data.raw_source
-        source = model_inputs.conditions[0]
+        source = model_inputs.source_latents
         mask_latents = model_inputs.mask_latents
         noise = copy.deepcopy(model_inputs.noise)
 
@@ -556,7 +544,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 branch_preds = {}
                 for k, branch in cfg_branches.items():
                     branch_preds[k] = self.denoise_cfg_branch(branch, xt, timestep)
-                pred = self.combine_cfg_predictions(branch_preds, text_cfg_scale)
+                pred = combine_predictions(
+                    branch_preds, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, self.rescale_cfg
+                )
 
                 # Optionally handle Poisson refinement
                 if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() <= self.poisson_steps[1]:
@@ -605,5 +595,39 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         poisson_lambda_e: float = 1.0,
         poisson_lambda_s: float = 1.0,
         poisson_momentum: float = 0.1,
-    ) -> torch.Tensor:
-        pass
+        mask_cfg_scale: float = 1.0,
+        interaction_cfg_scale: float | None = None,
+    ) -> dict[str, torch.Tensor]:
+        if prompt is None or source_image is None or mask_image is None:
+            raise ValueError("MaskFlow generation requires prompt, source_image and mask_image.")
+        source_image = source_image.convert("RGB")
+        mask_image = mask_image.convert("RGB")
+        size = (width or source_image.width, height or source_image.height)
+        source_image = source_image.resize(size, Image.Resampling.LANCZOS)
+        mask_image = mask_image.resize(size, Image.Resampling.NEAREST)
+        batch = {
+            "prompt": [prompt],
+            "negative_prompt": [negative_prompt or ""],
+            "conditions": {
+                "source": T.to_tensor(source_image).unsqueeze(0),
+                "mask": T.to_tensor(mask_image).unsqueeze(0),
+            },
+        }
+        options = dict(
+            mask_dilation_kernel=mask_dilation_kernel,
+            mask_blur_kernel=mask_blur_kernel,
+            mask_blur_sigma=mask_blur_sigma,
+            enable_pixel_blend=enable_pixel_blend,
+            enable_poisson_infer=enable_poisson_refine,
+            poisson_lambda_e=poisson_lambda_e,
+            poisson_lambda_s=poisson_lambda_s,
+            poisson_momentum=poisson_momentum,
+        )
+        previous = {key: getattr(self, key) for key in options}
+        try:
+            for key, value in options.items():
+                setattr(self, key, value)
+            return self.eval_step(batch, num_inference_steps, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale)
+        finally:
+            for key, value in previous.items():
+                setattr(self, key, value)

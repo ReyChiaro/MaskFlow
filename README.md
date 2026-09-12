@@ -127,6 +127,50 @@ uv run python inference.py \
 
 The base model defaults to [`Qwen/Qwen-Image-Edit-2511`](https://huggingface.co/Qwen/Qwen-Image-Edit-2511), and the output directory is created automatically.
 
+### Text and mask CFG
+
+QwenImage and FLUX.2 MaskFlow support four condition branches. The source image is
+always retained: `pm` keeps prompt and mask, `pn` keeps only the prompt, `nm` keeps
+only the mask, and `nn` supplies neither. Missing text uses an empty string during
+training; inference uses `negative_prompt` when provided. A nonempty negative
+prompt therefore gives a negative-text branch rather than an absent-text branch.
+
+`MaskFlowTrainer` selects one branch per batch. The default training probabilities
+are `pm=0.7, pn=0.1, nm=0.1, nn=0.1`, configured under
+`trainer.cfg_branch_probabilities`. They override the legacy dropout rates. To
+restore text-only dropout, set `trainer.cfg_branch_probabilities=null` and leave
+`trainer.mask_cfg_dropout=0`. The dataset always supplies the original mask.
+For `pn` and `nn`, only model-visible mask conditions are removed; the target,
+noise path, and background constraint still use the original mask. These two
+branches use full-image MSE, while `pm` and `nm` retain the configured masked loss.
+
+At inference, let `t=text_cfg_scale`, `m=mask_cfg_scale`, and
+`k=interaction_cfg_scale`. The velocity combination is:
+
+```text
+v = v_nn + t*(v_pn-v_nn) + m*(v_nm-v_nn) + k*(v_pm-v_pn-v_nm+v_nn)
+```
+
+By default, `interaction_cfg_scale=null` sets `k=t`, giving
+`v_nn + m*(v_nm-v_nn) + t*(v_pm-v_nm)`. With `m=1`, this is the existing text CFG.
+Set an explicit interaction scale to use the general four-branch formula.
+Only branches with nonzero coefficients are evaluated, plus `pm` when needed for
+norm rescaling (`pipeline.rescale_cfg=true`). Scales of zero are supported.
+Poisson refinement and background replacement run once after CFG combination.
+
+For a checkpoint trained with all four branches, add these overrides to inference:
+
+```bash
+runtime.text_cfg_scale=4.0 runtime.mask_cfg_scale=1.5 runtime.interaction_cfg_scale=null
+```
+
+Training-time evaluation and `evaluate.py` use the same parameter names without
+the `runtime` prefix (under `trainer` for training-time evaluation). Existing
+text-only checkpoints should keep `mask_cfg_scale=1` and
+`interaction_cfg_scale=null`; they have not been trained for `pn` or `nn`.
+FLUX.2's native `pipeline.guidance_scale` remains a separate model input.
+This training integration applies to `MaskFlowTrainer`; DMD and NFT are unchanged.
+
 ## FLUX.2-dev
 
 FLUX.2-dev uses the existing LoRA and MaskFlow trainers. The base pipeline preserves
