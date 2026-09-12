@@ -76,9 +76,14 @@ class Flux2MaskFlow(Flux2):
                 image = self.resize_image(spatial_conditions[key], size, is_mask=key == "mask")
                 encoded_conditions[key] = self.image_processor.preprocess(image, height=size[0], width=size[1])
         return Flux2MaskFlowPreprocessOutput(
-            prompt=batch["prompt"], negative_prompt=batch.get("negative_prompt"),
-            target=target, height=size[0], width=size[1],
-            dit_conditions=encoded_conditions, raw_source=source, mask=mask,
+            prompt=batch["prompt"],
+            negative_prompt=batch.get("negative_prompt"),
+            target=target,
+            height=size[0],
+            width=size[1],
+            dit_conditions=encoded_conditions,
+            raw_source=source,
+            mask=mask,
         )
 
     def encode_mask(self, mask):
@@ -98,8 +103,11 @@ class Flux2MaskFlow(Flux2):
             result.source_latents = result.conditions[source_index]
             result.mask_ratio = data.mask.flatten(1).mean(dim=1).view(-1, 1, 1)
             result.noised_target = self.scheduler.add_noise_by_sigmas(
-                result.noise, result.source_latents, torch.ones(1, device=self.device),
-                result.source_latents, result.mask_latents,
+                result.noise,
+                result.source_latents,
+                torch.ones(1, device=self.device),
+                result.source_latents,
+                result.mask_latents,
             )
         return result
 
@@ -111,8 +119,15 @@ class Flux2MaskFlow(Flux2):
         mask = self.unpack_spatial(inputs.mask_latents, inputs.latent_ids)
         image = Flux2Pipeline._unpatchify_latents(target)
         image = maskflow_utils.poisson_refine(
-            image, source, mask >= 0.5, mask, self.poisson_lambda_e, self.poisson_lambda_s,
-            self.poisson_num_iter, self.poisson_momentum, disable_progress_bar=True,
+            image,
+            source,
+            mask > 0,
+            mask,
+            self.poisson_lambda_e,
+            self.poisson_lambda_s,
+            self.poisson_num_iter,
+            self.poisson_momentum,
+            disable_progress_bar=True,
         )
         return Flux2Pipeline._patchify_latents(image).to(target)
 
@@ -131,9 +146,15 @@ class Flux2MaskFlow(Flux2):
         result.sigmas = self.scheduler.get_sigmas(ts, target.shape[1])
         result.timesteps = result.sigmas
         result.noised_target = self.scheduler.add_noise_by_sigmas(
-            result.noise, target, result.sigmas, result.source_latents, result.mask_latents,
+            result.noise,
+            target,
+            result.sigmas,
+            result.source_latents,
+            result.mask_latents,
         )
-        result.ground_truth = self.scheduler.get_velocity(result.noise, target, result.source_latents, result.mask_latents)
+        result.ground_truth = self.scheduler.get_velocity(
+            result.noise, target, result.source_latents, result.mask_latents
+        )
         return result
 
     def compute_loss(self, prediction, inputs):
@@ -152,7 +173,14 @@ class Flux2MaskFlow(Flux2):
             refined = Flux2Pipeline._pack_latents(self.refine_target(x0, inputs))
             prediction = (xt - refined) / sigma.clamp_min(1e-4)
         return self.scheduler.step(
-            xt, prediction, sigma, next_sigma, derivative, inputs.source_latents, inputs.mask_latents, inputs.noise,
+            xt,
+            prediction,
+            sigma,
+            next_sigma,
+            derivative,
+            inputs.source_latents,
+            inputs.mask_latents,
+            inputs.noise,
         )
 
     def postprocess_output(self, output, data):
