@@ -238,6 +238,41 @@ the actual two-GPU training scripts (`no_shard` and FSDP `full_shard`) and evalu
 scripts, including three samples split across two workers. Full pretrained
 FLUX.2-dev image quality and memory use have not been validated locally.
 
+## Hugging Face Parquet dataset
+
+`HFMaskEditDataset` reads the downloaded
+[MaskEdit-10k](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k) repository
+directly, including the images embedded in its Parquet files. Set `data_root` to
+the repository directory containing `data/scene`, `data/infographics_en`, and
+`data/infographics_cn`; no image extraction is needed.
+
+Select the Hugging Face dataset configs when training:
+
+```bash
+.venv/bin/python -m torch.distributed.run --standalone --nproc-per-node=1 \
+  finetune.py --config-name sft_maskflow \
+  trainset=hf_mask_edit evalset=hf_mask_edit \
+  trainset.data_root=/path/to/MaskEdit-10k \
+  evalset.data_root=/path/to/MaskEdit-10k \
+  'trainset.subsets=[scene,infographics_en,infographics_cn]' \
+  evalset.subsets=scene
+```
+
+Use `trainset.subsets=scene` for a single subset, or a list for any combination.
+The supported names are exactly `scene`, `infographics_en`, and `infographics_cn`.
+Training defaults to `split: train`; evaluation defaults to `split: test`.
+For standalone evaluation, select `evalset=hf_mask_edit` with the same overrides.
+Model and trainer settings continue to come from the selected training config.
+
+Subsets are concatenated in the supplied order and shards are sorted by filename.
+`load_start` and `load_end` apply to the combined samples with the same behavior
+as `MaskEditDataset`: integer end indices are exclusive; fractional end indices
+include the row at `floor(load_end * sample_count)`, capped at the dataset length.
+Image names, RGB conversion, cropping, resizing, mask interpolation, and prompt
+processing match the JSONL loader. Images are decoded on access, with one Parquet
+row group cached per worker. Keep the per-process batch size at 1 when images
+have different spatial sizes.
+
 ## Distribution Matching Distillation
 
 To improve efficiency for practical deployment, we apply Distribution Matching Distillation (DMD) and provide accelerated 8-step and 16-step variants. The distilled LoRA represents a residual on top of the corresponding standard MaskFlow checkpoint, so both the matching SFT and DMD weights are required during inference. Although the student is distilled with teacher text classifier-free guidance, enabling CFG during student inference generally gives better performance.
