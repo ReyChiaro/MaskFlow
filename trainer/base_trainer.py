@@ -363,13 +363,13 @@ class BaseTrainer:
             options=StateDictOptions(full_state_dict=False, strict=False),
         )
 
-    def save_checkpoints(self, global_step: int):
+    def save_checkpoints(self, global_step: int, force: bool = False):
         r"""
         - Training states
         - Data sampler
         - Model: checkpoints of *trainable* parameters of trasnformer by default.
         """
-        if not (global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
+        if not (force or global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
             return
 
         checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
@@ -614,10 +614,10 @@ class BaseTrainer:
         logger.info(f"🌊 Training Finished.")
 
     @torch.inference_mode()
-    def evaluate(self, global_step: int):
+    def evaluate(self, global_step: int, force: bool = False):
         if self.eval_loader is None:
             return
-        if not (global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
+        if not (force or global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
             return
 
         save_dir = Path(self.evaluation_dir) / f"step-{global_step}"
@@ -632,7 +632,9 @@ class BaseTrainer:
         with open(rank_metadata_path, "w", encoding="utf-8") as metadata_file:
             for step, batch in enumerate(self.eval_loader):
                 batch = self.preprocess_eval_batch(batch, global_step)
-                output: dict[str, torch.Tensor] = self.pipe.eval_step(batch, self.num_inference_steps)
+                output: dict[str, torch.Tensor] = self.pipe.eval_step(
+                    batch, self.num_inference_steps, text_cfg_scale=self.text_cfg_scale,
+                )
                 self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 
         wait_for_everyone()

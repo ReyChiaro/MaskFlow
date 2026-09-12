@@ -30,7 +30,8 @@ script/
 viewer/
 checkpoints/
 evaluator/docs/
-tests/
+tests/*
+!tests/test_diffusion_nft.py
 .env
 
 *.log
