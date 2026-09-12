@@ -1,7 +1,11 @@
 import os
+import math
 import torch
+import pyarrow.parquet as pq
 import torchvision.transforms.v2.functional as T
 
+from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from data_module.dataset import SchemaDataset
@@ -45,25 +49,27 @@ class MaskEditDataset(SchemaDataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         sample = self.samples[index % self.num_samples]
+        target = sample["target"]
+        target = self._load_image_tensor(os.path.join(self.image_root, target)) if target is not None else None
+        conditions = sample["conditions"]
+        if isinstance(conditions, dict):
+            conditions = {k: self._load_image_tensor(os.path.join(self.image_root, c)) for k, c in conditions.items()}
+        else:
+            conditions = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
+        return self._preprocess_sample(sample, target, conditions, image_name(sample))
+
+    def _preprocess_sample(self, sample, target, conditions, name) -> dict[str, Any]:
         prompt = sample["prompt"]
         negative_prompt = sample.get("negative_prompt", "")
         edit_instruction = sample.get("edit_instruction", "")
-        conditions = sample["conditions"]
-        target = sample["target"]
-        name = image_name(sample)
-
-        target = self._load_image_tensor(os.path.join(self.image_root, target)) if target is not None else None
 
         # Reshape conditions and target
-        reference = target
-        if reference is None:
-            reference = self._load_image_tensor(os.path.join(self.image_root, conditions["source"]))
+        reference = target if target is not None else conditions["source"]
         reference, aspect_ratio = crop_image_to_aspect_ratio(reference)
         if target is not None:
             target = reshape_to_divisible_max_resolution(reference, aspect_ratio, divisible_by=self.divisible_by)
 
         if isinstance(conditions, dict):
-            conditions = {k: self._load_image_tensor(os.path.join(self.image_root, c)) for k, c in conditions.items()}
             conditions = {k: center_crop_to_aspect_ratio(c, aspect_ratio) for k, c in conditions.items()}
             conditions = {
                 k: reshape_to_divisible_max_resolution(
@@ -75,7 +81,6 @@ class MaskEditDataset(SchemaDataset):
                 for k, c in conditions.items()
             }
         else:
-            conditions = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
             conditions = [center_crop_to_aspect_ratio(c, aspect_ratio) for c in conditions]
             conditions = [
                 reshape_to_divisible_max_resolution(c, aspect_ratio, divisible_by=self.divisible_by)
@@ -90,3 +95,106 @@ class MaskEditDataset(SchemaDataset):
             "conditions": self._preprocess_conditions(conditions),
             "target": self._preprocess_target(target) if target is not None else None,
         }
+
+
+class HFMaskEditDataset(MaskEditDataset):
+    """Load downloaded MaskEdit-10k Parquet shards from data_root/data/<subset>.
+
+    Subsets are concatenated in the supplied order, with shards sorted by name.
+    load_start/load_end slice the combined samples using MaskEditDataset semantics.
+    Only filenames and row locations are indexed eagerly; each worker caches one
+    row group of embedded images at a time.
+    """
+
+    SUBSETS = ("scene", "infographics_en", "infographics_cn")
+    COLUMNS = ("source", "mask", "target", "prompt", "negative_prompt", "edit_instruction")
+
+    def __init__(
+        self,
+        data_root: str,
+        subsets: str | list[str] = "scene",
+        split: str = "train",
+        load_start: int | float = 0.0,
+        load_end: int | float = 1.0,
+        divisible_by: int = 32,
+        enable_prompt_truncation: bool = False,
+        replace_prompt_placeholder_with: str | None = None,
+    ):
+        self.subsets = [subsets] if isinstance(subsets, str) else list(subsets)
+        if not self.subsets or any(subset not in self.SUBSETS for subset in self.subsets):
+            raise ValueError(f"subsets must contain one or more of {self.SUBSETS}, got {self.subsets}.")
+        if len(set(self.subsets)) != len(self.subsets):
+            raise ValueError(f"Duplicate subsets: {self.subsets}.")
+        if split not in ("train", "test"):
+            raise ValueError(f"split must be train or test, got {split!r}.")
+
+        self.data_root = Path(data_root)
+        self.split = split
+        self._cached_key = None
+        self._cached_table = None
+        super().__init__(
+            image_root=data_root,
+            data_file=None,
+            load_start=load_start,
+            load_end=load_end,
+            divisible_by=divisible_by,
+            enable_prompt_truncation=enable_prompt_truncation,
+            replace_prompt_placeholder_with=replace_prompt_placeholder_with,
+        )
+        if not self.num_samples:
+            raise ValueError("No samples selected; check the Parquet files and load_start/load_end.")
+
+    def _load_data_file(self, load_start: int | float = 0.0, load_end: int | float = 1.0):
+        samples = []
+        for subset in self.subsets:
+            directory = self.data_root / "data" / subset
+            files = sorted(directory.glob(f"{self.split}-*.parquet"))
+            if not files:
+                raise FileNotFoundError(f"No {self.split} Parquet shards found in {directory}.")
+            for path in files:
+                with pq.ParquetFile(path) as parquet:
+                    missing = set(self.COLUMNS) - set(parquet.schema_arrow.names)
+                    if missing:
+                        raise ValueError(f"Missing columns in {path}: {sorted(missing)}.")
+                    # Read filenames without loading the target.bytes column.
+                    targets = parquet.read(columns=["target.path"]).column("target").to_pylist()
+                    offset = 0
+                    for group in range(parquet.num_row_groups):
+                        count = parquet.metadata.row_group(group).num_rows
+                        for row in range(count):
+                            samples.append({
+                                "target": targets[offset + row]["path"],
+                                "parquet_file": path,
+                                "row_group": group,
+                                "row_index": row,
+                            })
+                        offset += count
+
+        num_total = len(samples)
+        start_idx = load_start if isinstance(load_start, int) else math.floor(load_start * num_total)
+        end_idx = load_end if isinstance(load_end, int) else math.floor(load_end * num_total) + 1
+        return samples[start_idx : min(len(samples), end_idx)]
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_cached_key"] = None
+        state["_cached_table"] = None
+        return state
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        entry = self.samples[index % self.num_samples]
+        key = (entry["parquet_file"], entry["row_group"])
+        try:
+            if key != self._cached_key:
+                with pq.ParquetFile(key[0]) as parquet:
+                    table = parquet.read_row_group(key[1], columns=list(self.COLUMNS))
+                self._cached_table = table
+                self._cached_key = key
+            sample = self._cached_table.slice(entry["row_index"], 1).to_pylist()[0]
+            target = self._load_image_tensor(BytesIO(sample["target"]["bytes"]))
+            conditions = {k: self._load_image_tensor(BytesIO(sample[k]["bytes"])) for k in ("source", "mask")}
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise ValueError(
+                f"Failed to load {key[0]}, row group {key[1]}, row {entry['row_index']}: {error}"
+            ) from error
+        return self._preprocess_sample(sample, target, conditions, image_name(entry))

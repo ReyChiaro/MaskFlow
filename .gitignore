@@ -31,8 +31,6 @@ viewer/
 checkpoints/
 evaluator/docs/
 tests/*
-!tests/test_diffusion_nft.py
-!tests/test_maskflow_cfg.py
 .env
 
 *.log
