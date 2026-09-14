@@ -33,6 +33,7 @@ evaluator/docs/
 tests/*
 .env
 
+launch_*.sh
 *.log
 *.typ
 *.tar
