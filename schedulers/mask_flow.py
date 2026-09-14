@@ -1,18 +1,17 @@
 import copy
-import math
-import torch
-import numpy as np
 import dataclasses
-
-from typing import Literal
+import math
 from contextlib import contextmanager
+from typing import Literal
+
+import numpy as np
+import torch
 
 from .flow_matching import RectifiedFlowMatchingScheduler
 
 
 @dataclasses.dataclass
 class MaskFlowScheduler(RectifiedFlowMatchingScheduler):
-
     unmask_with: Literal["target", "source", "noisy_target", "noisy_source"] = "noisy_source"
 
     def add_noise_by_sigmas(

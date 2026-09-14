@@ -1,12 +1,9 @@
 import os
-
 from datetime import datetime, timedelta
 
 import torch
 import torch.distributed as dist
-
 from omegaconf import OmegaConf
-
 
 _distributed_timestamps: dict[str, str] = {}
 

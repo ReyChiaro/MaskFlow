@@ -1,20 +1,23 @@
-import os
 import math
-import torch
-import pyarrow.parquet as pq
-import torchvision.transforms.v2.functional as T
-
+import os
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import pyarrow.parquet as pq
+import torch
+import torchvision.transforms.v2.functional as T
+
 from data_module.dataset import SchemaDataset
 from data_module.sample_utils import image_name
-from data_module.utils import center_crop_to_aspect_ratio, crop_image_to_aspect_ratio, reshape_to_divisible_max_resolution
+from data_module.utils import (
+    center_crop_to_aspect_ratio,
+    crop_image_to_aspect_ratio,
+    reshape_to_divisible_max_resolution,
+)
 
 
 class MaskEditDataset(SchemaDataset):
-
     def __init__(
         self,
         image_root,
@@ -83,15 +86,14 @@ class MaskEditDataset(SchemaDataset):
         else:
             conditions = [center_crop_to_aspect_ratio(c, aspect_ratio) for c in conditions]
             conditions = [
-                reshape_to_divisible_max_resolution(c, aspect_ratio, divisible_by=self.divisible_by)
-                for c in conditions
+                reshape_to_divisible_max_resolution(c, aspect_ratio, divisible_by=self.divisible_by) for c in conditions
             ]
 
         return {
             "image_name": name,
             "prompt": self._preprocess_prompt(prompt),  # Prompt without position cues
             "negative_prompt": negative_prompt,
-            "edit_instruction": edit_instruction,       # Prompt with position cues
+            "edit_instruction": edit_instruction,  # Prompt with position cues
             "conditions": self._preprocess_conditions(conditions),
             "target": self._preprocess_target(target) if target is not None else None,
         }
@@ -167,11 +169,13 @@ class HFMaskEditDataset(MaskEditDataset):
                             sample = records[offset + row]
                             sample["conditions"] = {role: sample.pop(role)["path"] for role in ("source", "mask")}
                             sample["target"] = sample["target"]["path"]
-                            sample.update({
-                                "parquet_file": path,
-                                "row_group": group,
-                                "row_index": row,
-                            })
+                            sample.update(
+                                {
+                                    "parquet_file": path,
+                                    "row_group": group,
+                                    "row_index": row,
+                                }
+                            )
                             samples.append(sample)
                         offset += count
 

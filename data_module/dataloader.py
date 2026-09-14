@@ -1,4 +1,4 @@
-from torch.utils.data import Dataset, DataLoader, default_collate
+from torch.utils.data import DataLoader, Dataset, default_collate
 
 from data_module.sampler import CheckpointDistributedSampler
 

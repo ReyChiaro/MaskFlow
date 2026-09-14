@@ -30,7 +30,7 @@ def summarize_model(model: nn.Module) -> dict[str, int | float]:
         "Num Trainable Params": convert_integer(trainable_params),
         "Model Size (MB)": f"{size_all_mb:.4f}",
         "Model Size (GB)": f"{size_all_mb / 1024:.4f}",
-        "Trainable (%)": f"{trainable_params/total_params*100:.2f}",
+        "Trainable (%)": f"{trainable_params / total_params * 100:.2f}",
     }
 
 

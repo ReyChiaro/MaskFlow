@@ -1,10 +1,10 @@
-import math
-import torch
-import numpy as np
 import dataclasses
-
-from typing import Literal
+import math
 from contextlib import contextmanager
+from typing import Literal
+
+import numpy as np
+import torch
 from diffusers.training_utils import compute_loss_weighting_for_sd3
 
 from schedulers.base_scheduler import BaseScheduler
@@ -12,7 +12,6 @@ from schedulers.base_scheduler import BaseScheduler
 
 @dataclasses.dataclass
 class RectifiedFlowMatchingScheduler(BaseScheduler):
-
     weighting_scheme: Literal["logit_normal", "mode"] | None = ("logit_normal",)
     logit_normal_mean: float = 0.0
     logit_normal_std: float = 1.0
