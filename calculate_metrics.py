@@ -1,4 +1,4 @@
-"""Build a validated metric pipeline from JSONL records and image directories.
+"""Build a validated metric pipeline from JSONL or Hugging Face MaskEdit data.
 
 Unavailable metrics are reported and skipped; valid metrics still run. Pairwise
 metrics use target images when requested/declared, otherwise source images.
@@ -10,6 +10,7 @@ import math
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 import torch
@@ -17,6 +18,7 @@ from loguru import logger
 from PIL import Image
 from torchvision.transforms import functional as TF
 
+from data_module.mask_edit_dataset import HFMaskEditDataset
 from data_module.sample_utils import image_name
 from data_module.utils import (
     center_crop_to_aspect_ratio,
@@ -101,6 +103,23 @@ def read_records(data_file):
     if not records:
         raise ValueError(f"No records found in {data_file}")
     return records
+
+
+class HFImageFiles(Sequence):
+    """Expose embedded images as file objects without extracting or retaining them."""
+
+    def __init__(self, dataset, role):
+        self.dataset, self.role = dataset, role
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        return BytesIO(self.dataset.load_image_bytes(index, self.role))
 
 
 class ImageFiles(Sequence):
@@ -190,8 +209,10 @@ class EvaluationData:
         device,
         preprocess,
         divisible_by,
+        dataset=None,
     ):
         self.rows, self.device = rows, device
+        self.dataset = dataset
         self.preprocess, self.divisible_by = preprocess, divisible_by
         self.paths, self.errors = {}, {}
         self._views, self._checked_images = {}, {}
@@ -255,6 +276,17 @@ class EvaluationData:
     def require(self, role):
         if role in self.errors:
             return self.errors[role]
+        if self.dataset is not None and role != "prediction" and self.overrides[role] is None:
+            images = HFImageFiles(self.dataset, role)
+            errors = []
+            for index in range(len(images)):
+                try:
+                    with Image.open(images[index]) as image:
+                        image.verify()
+                except (OSError, ValueError, TypeError) as error:
+                    errors.append(f"row {index + 1}: unreadable embedded {role}: {error}")
+            self.paths[role], self.errors[role] = images, errors
+            return errors
         errors, paths = [], []
         if role == "prediction":
             errors.extend(self.key_errors)
@@ -265,11 +297,16 @@ class EvaluationData:
             value = (
                 self.keys[index]
                 if role == "prediction"
-                else row.get("target") if role == "target" else conditions.get(role)
+                else row.get("target")
+                if role == "target"
+                else conditions.get(role)
             )
             # Prediction keys have no suffix. Add a synthetic suffix so dotted IDs survive resolution.
             if role == "prediction" and value:
                 value += ".png"
+            # Evaluation saves masks under the target stem, not the original mask path.
+            if self.dataset is not None and role == "mask" and self.overrides[role] is not None:
+                value = self.keys[index] + ".png" if self.keys[index] else None
             fallback = None
             if role != "prediction" and self.overrides[role] is not None and self.keys[index]:
                 fallback = self.keys[index] + ".png"
@@ -461,6 +498,9 @@ def calculate_metrics(
     clip_model_id="/root/models/clip-vit-large-patch14-336",
     clip_batch_size=8,
     output=None,
+    data_root=None,
+    subsets=None,
+    split=None,
 ):
     """Validate -> select metric steps -> execute -> report. Legacy folder arguments still work."""
     if reference not in {"auto", "source", "target"}:
@@ -468,7 +508,20 @@ def calculate_metrics(
     if target_dir is not None and gt_dir is not None and Path(target_dir) != Path(gt_dir):
         raise ValueError("target_dir and its legacy alias gt_dir disagree")
     target_dir = target_dir if target_dir is not None else gt_dir
-    if data_file is not None:
+    if data_root is not None and (data_file is not None or image_root is not None):
+        raise ValueError("data_root cannot be combined with data_file or image_root.")
+    if data_root is None and (subsets is not None or split is not None):
+        raise ValueError("subsets and split require data_root.")
+    dataset = None
+    if data_root is not None:
+        dataset = HFMaskEditDataset(
+            data_root=data_root,
+            subsets=list(HFMaskEditDataset.SUBSETS) if subsets is None else subsets,
+            split="test" if split is None else split,
+            divisible_by=divisible_by,
+        )
+        rows = dataset.samples
+    elif data_file is not None:
         rows = read_records(data_file)
         image_root = Path(image_root) if image_root is not None else Path(data_file).parent
     else:
@@ -481,13 +534,13 @@ def calculate_metrics(
             }
             for key in image_index(Path(pred_dir))
         ]
-    preprocess = preprocess or ("mask-edit" if data_file is not None else "resize")
+    preprocess = preprocess or ("mask-edit" if data_file is not None or dataset is not None else "resize")
     initialize_metrics()
     registry = get_metrics()
     if metrics is None:
         metrics = (
             DEFAULT_METRICS
-            if data_file is not None
+            if data_file is not None or dataset is not None
             else [name for name in registry if name != "CLIP-TEXT" and not name.endswith(("-FG", "-BG"))]
         )
     data = EvaluationData(
@@ -502,6 +555,7 @@ def calculate_metrics(
         device,
         preprocess,
         divisible_by,
+        dataset=dataset,
     )
     pipeline, skipped = build_pipeline(
         data,
@@ -526,6 +580,9 @@ def calculate_metrics(
         "clip_model_id": clip_model_id,
         "clip_score_definition": "mean(max(cosine(image, prompt), 0))",
         "data_file": str(data_file) if data_file is not None else None,
+        "data_root": str(data_root) if data_root is not None else None,
+        "subsets": dataset.subsets if dataset is not None else None,
+        "split": dataset.split if dataset is not None else None,
         "image_root": str(image_root) if image_root is not None else None,
         "pred_dir": str(pred_dir),
         "source_dir": str(source_dir) if source_dir is not None else None,
@@ -589,22 +646,26 @@ def calculate_target_free_metrics(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--data-file", type=Path, help="JSONL test set; the filename/extension is arbitrary")
+    inputs.add_argument("--data-root", type=Path, help="Downloaded MaskEdit-10k repository containing data/<subset>")
     parser.add_argument(
-        "--data-file", type=Path, required=True, help="JSONL test set; the filename/extension is arbitrary"
+        "--subsets", nargs="+", choices=HFMaskEditDataset.SUBSETS, help="HF subsets; default: all three"
     )
+    parser.add_argument("--split", choices=["train", "test"], help="HF split; default: test")
     parser.add_argument("--source-dir", type=Path, help="Original-image directory; replaces conditions.source root")
     parser.add_argument("--pred-dir", type=Path, required=True)
     parser.add_argument("--image-root", type=Path, help="Root for JSONL paths; default: JSONL parent directory")
-    parser.add_argument("--mask-dir", type=Path, help="Optional mask directory; otherwise resolve JSONL mask paths")
+    parser.add_argument("--mask-dir", type=Path, help="Optional mask directory; HF masks match prediction filenames")
     parser.add_argument("--target-dir", "--gt-dir", dest="target_dir", type=Path, help="Optional target directory")
     parser.add_argument("--reference", choices=["auto", "source", "target"], default="auto")
     parser.add_argument("--region", choices=list(REGION_SUFFIX), default="whole")
     parser.add_argument("--enable-pixel-blend", action="store_true")
     parser.add_argument("--metrics", nargs="+", default=DEFAULT_METRICS)
-    parser.add_argument("--prompt-key", default="prompt", help="Any top-level JSONL text field")
+    parser.add_argument("--prompt-key", default="prompt", help="Top-level text field in JSONL or HF metadata")
     parser.add_argument("--preprocess", choices=["mask-edit", "resize"], default="mask-edit")
     parser.add_argument("--divisible-by", type=int, default=32)
-    parser.add_argument("--clip-model-id", default="/root/models/clip-vit-large-patch14-336")
+    parser.add_argument("--clip-model-id", default="openai/clip-vit-large-patch14-336")
     parser.add_argument("--clip-batch-size", type=int, default=8)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output", type=Path, help="Default: predictions' parent / metrics_<region>.json")

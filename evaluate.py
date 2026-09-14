@@ -37,7 +37,7 @@ def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig | None):
     logger.info("All adapters have been loaded into the model.")
 
 
-@hydra.main(config_path="configs", config_name="eval_maskflow", version_base="v1.2")
+@hydra.main(config_path="configs", config_name="eval_qwenimage_maskflow", version_base="v1.2")
 def evaluate(cfgs: DictConfig):
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     rank = int(os.environ.get("RANK", 0))

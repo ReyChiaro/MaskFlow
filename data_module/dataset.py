@@ -1,17 +1,16 @@
-import os
-import math
 import json
+import math
+import os
+from pathlib import Path
+from typing import Any
+
 import torch
 import torchvision.transforms.functional as T
-
-from pathlib import Path
-from torch.utils.data import Dataset
 from PIL import Image
-from typing import Any
+from torch.utils.data import Dataset
 
 
 class SchemaDataset(Dataset):
-
     def __init__(
         self,
         image_root: str,

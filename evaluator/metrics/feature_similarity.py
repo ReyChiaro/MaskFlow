@@ -5,8 +5,8 @@ from transformers import AutoImageProcessor, AutoModel, CLIPModel
 from evaluator.register import REGISTER_METRIC
 from evaluator.metrics.mask_utils import iter_image_pairs, mask_region_pair, mean_metric
 
-CLIP_MODEL_ID = "/root/models/clip-vit-large-patch14-336"
-DINO_MODEL_ID = "/root/models/dinov2-large"
+CLIP_MODEL_ID = "/root/intern-xr/models/clip-vit-large-patch14-336"
+DINO_MODEL_ID = "/root/intern-xr/models/dinov2-large"
 
 _MODEL_CACHE: dict[tuple[str, str], tuple[object, torch.nn.Module]] = {}
 

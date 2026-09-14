@@ -1,31 +1,38 @@
 import copy
+import dataclasses
 import math
+from typing import Any, Optional
+
 import torch
 import torch.nn.functional as F
-import dataclasses
 import torchvision.transforms.functional as T
-
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
-    QwenImageEditPlusPipeline,
     CONDITION_IMAGE_SIZE,
+    QwenImageEditPlusPipeline,
     calculate_dimensions,
 )
+from loguru import logger
 from PIL import Image
 from tqdm import tqdm
-from typing import Any, Optional
-from loguru import logger
 
-from schedulers import MaskFlowScheduler
-from pipelines import maskflow_utils
-from pipelines.cfg import branch_conditions, required_branches, combine_predictions
-from pipelines.base_pipeline import PreprocessOutput
-from pipelines.qwenimage.qwenimage_edit_plus import QwenImageEditPlus, QwenForwardOutput, resize_rgb
 from data_module.utils import MAX_RESOLUTION
+from pipelines import maskflow_utils
+from pipelines.base_pipeline import PreprocessOutput
+from pipelines.cfg import (
+    branch_conditions,
+    combine_predictions,
+    required_branches,
+)
+from pipelines.qwenimage.qwenimage_edit_plus import (
+    QwenForwardOutput,
+    QwenImageEditPlus,
+    resize_rgb,
+)
+from schedulers import MaskFlowScheduler
 
 
 @dataclasses.dataclass
 class QwenMaskFlowPreprocessOutput(PreprocessOutput):
-
     raw_source: torch.Tensor | None = None
     mask: torch.Tensor | None = None
     cfg_branch: str = "pm"
@@ -33,7 +40,6 @@ class QwenMaskFlowPreprocessOutput(PreprocessOutput):
 
 @dataclasses.dataclass
 class QwenMaskFlowCFGBranch:
-
     prompt_embeds: torch.Tensor
     prompt_embeds_mask: torch.Tensor
     conditions: list[torch.Tensor]
@@ -128,7 +134,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         if conditions is None or "mask" not in conditions or "source" not in conditions:
             logger.warning(
-                f"QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
+                "QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
             )
             return super().preprocess_inputs(batch)
 
@@ -185,6 +191,30 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             cfg_branch=batch.get("cfg_branch", "pm"),
         )
 
+    def build_cfg_branch(
+        self,
+        data: QwenMaskFlowPreprocessOutput,
+        name: str,
+        conditions: list[torch.Tensor],
+        image_shapes: list[tuple[int]],
+        training: bool = False,
+    ):
+        keep_text, keep_mask = branch_conditions(name)
+        prompt = (
+            data.prompt
+            if keep_text
+            else ([""] * len(data.prompt) if training else data.negative_prompt or [""] * len(data.prompt))
+        )
+        vlm_conditions = {key: value for key, value in data.vlm_conditions.items() if keep_mask or key != "mask"}
+        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, vlm_conditions)
+        # The image shape list contains the generated image, source, then mask.
+        return QwenMaskFlowCFGBranch(
+            prompt_embeds=prompt_embeds,
+            prompt_embeds_mask=prompt_embeds_mask,
+            conditions=conditions if keep_mask else conditions[:1],
+            image_shapes=image_shapes if keep_mask else [shapes[:2] for shapes in image_shapes],
+        )
+
     def prepare_forward_inputs(self, preprocessed_data: QwenMaskFlowPreprocessOutput) -> QwenMaskFlowForwardOutput:
         r"""
         Prepare training forward inputs.
@@ -196,7 +226,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         if getattr(preprocessed_data, "mask", None) is None:
             logger.warning(
-                f"QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
+                "QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
             )
             return super().prepare_forward_inputs(preprocessed_data)
 
@@ -285,23 +315,6 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             mask_ratio=mask_ratio,
         )
 
-    def build_cfg_branch(self, data, name, conditions, image_shapes, training=False):
-        keep_text, keep_mask = branch_conditions(name)
-        prompt = (
-            data.prompt
-            if keep_text
-            else ([""] * len(data.prompt) if training else data.negative_prompt or [""] * len(data.prompt))
-        )
-        vlm_conditions = {key: value for key, value in data.vlm_conditions.items() if keep_mask or key != "mask"}
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt, vlm_conditions)
-        # The image shape list contains the generated image, source, then mask.
-        return QwenMaskFlowCFGBranch(
-            prompt_embeds=prompt_embeds,
-            prompt_embeds_mask=prompt_embeds_mask,
-            conditions=conditions if keep_mask else conditions[:1],
-            image_shapes=image_shapes if keep_mask else [shapes[:2] for shapes in image_shapes],
-        )
-
     def prepare_eval_inputs(
         self,
         preprocessed_data: QwenMaskFlowPreprocessOutput,
@@ -317,7 +330,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
 
         if getattr(preprocessed_data, "mask", None) is None:
             logger.warning(
-                f"QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
+                "QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
             )
             return super().prepare_eval_inputs(preprocessed_data, text_cfg_scale)
 
