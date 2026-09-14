@@ -273,6 +273,45 @@ processing match the JSONL loader. Images are decoded on access, with one Parque
 row group cached per worker. Keep the per-process batch size at 1 when images
 have different spatial sizes.
 
+Evaluate saved predictions directly against the Parquet test set:
+
+```bash
+.venv/bin/python calculate_metrics.py \
+  --data-root dataset/MaskEdit-10k \
+  --subsets scene infographics_en infographics_cn \
+  --pred-dir /path/to/run/predictions \
+  --reference target --region whole \
+  --metrics PSNR SSIM DISTS LPIPS \
+  --device cuda --output /path/to/run/metrics_all_whole.json
+```
+
+`--subsets scene` selects one subset; multiple names select their combined samples
+in the supplied order. Omitting `--subsets` selects all three. `--split` defaults
+to `test` and also accepts `train`. The report records the selected subsets, split,
+and sample count. Predictions match the target filename stem, as in `evaluate.py`;
+extra predictions outside the selected subsets are ignored, while missing or
+ambiguous matches are reported.
+
+Use `--region foreground --reference target` to evaluate the edit region, or
+`--region background --reference source` to evaluate background preservation.
+Regional metrics use the embedded dataset masks by default. To use saved inference
+masks, add `--mask-dir /path/to/run/mask`; these must use the same filename stems
+as the predictions. Whole-image metrics do not require masks. All image roles are
+read lazily from Parquet, and the existing `--preprocess mask-edit`/`resize` paths
+are applied once, without extracting images to disk.
+
+For text alignment, include `CLIP-TEXT` in `--metrics`, select the text field with
+`--prompt-key edit_instruction` (or `prompt`), and set `--clip-model-id` to the CLIP
+checkpoint directory. Text fields are used as stored in the dataset. DISTS and
+LPIPS also need their pretrained weights available. Check `skipped_metrics` and
+`failed_metrics` in the JSON report in addition to the successful scores. Regional
+metrics retain the existing convention of zeroing pixels outside the region.
+
+The JSONL interface remains available via `--data-file` and `--image-root`.
+`--data-root` cannot be combined with either; `--subsets` and `--split` apply only
+to the Hugging Face input. Use distinct `--output` paths for different subsets or
+regions to keep all reports.
+
 ## Distribution Matching Distillation
 
 To improve efficiency for practical deployment, we apply Distribution Matching Distillation (DMD) and provide accelerated 8-step and 16-step variants. The distilled LoRA represents a residual on top of the corresponding standard MaskFlow checkpoint, so both the matching SFT and DMD weights are required during inference. Although the student is distilled with teacher text classifier-free guidance, enabling CFG during student inference generally gives better performance.
