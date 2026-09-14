@@ -96,7 +96,7 @@ def poisson_refine(
 
         y = poisson_momentum * y + (1.0 - poisson_momentum) * y_next
 
-    if soft_M is not None:
-        soft_M = soft_M.expand_as(g)
-        y = soft_M * y + (1.0 - soft_M) * x_S
+    # if soft_M is not None:
+    #     soft_M = soft_M.expand_as(g)
+    #     y = soft_M * y + (1.0 - soft_M) * x_S
     return y
