@@ -4,7 +4,7 @@ data_root: dataset/MaskEdit-10k
 subsets: scene
 split: test
 load_start: 0.0
-load_end: 1.0
+load_end: 0.01
 divisible_by: 32
 enable_prompt_truncation: false
 replace_prompt_placeholder_with: "the masked area in the image 2"

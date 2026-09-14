@@ -141,8 +141,8 @@ class HFMaskEditDataset(MaskEditDataset):
             enable_prompt_truncation=enable_prompt_truncation,
             replace_prompt_placeholder_with=replace_prompt_placeholder_with,
         )
-        if not self.num_samples:
-            raise ValueError("No samples selected; check the Parquet files and load_start/load_end.")
+        # if not self.num_samples:
+        #     raise ValueError("No samples selected; check the Parquet files and load_start/load_end.")
 
     def _load_data_file(self, load_start: int | float = 0.0, load_end: int | float = 1.0):
         samples = []

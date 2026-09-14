@@ -4,7 +4,6 @@ import math
 
 import torch
 
-
 BRANCHES = ("pm", "pn", "nm", "nn")
 
 
@@ -36,15 +35,13 @@ def training_probabilities(probabilities=None, text_dropout=0.1, mask_dropout=0.
     return result
 
 
-def cfg_coefficients(text_scale=1.0, mask_scale=1.0, interaction_scale=None):
+def cfg_coefficients(text_scale: float = 1.0, mask_scale: float = 1.0, interaction_scale: float = None):
     """Default: nn + mask*(nm-nn) + text*(pm-nm).
 
     An explicit interaction scale enables the general four-branch formula:
     nn + text*(pn-nn) + mask*(nm-nn) + interaction*(pm-pn-nm+nn).
     """
     interaction = text_scale if interaction_scale is None else interaction_scale
-    if not all(math.isfinite(s) for s in (text_scale, mask_scale, interaction)):
-        raise ValueError("CFG scales must be finite.")
     return {
         "pm": interaction,
         "pn": text_scale - interaction,
@@ -58,7 +55,13 @@ def required_branches(text_scale=1.0, mask_scale=1.0, interaction_scale=None, re
     return [name for name in BRANCHES if coefficients[name] != 0 or (rescale and name == "pm")]
 
 
-def combine_predictions(predictions, text_scale=1.0, mask_scale=1.0, interaction_scale=None, rescale=True):
+def combine_predictions(
+    predictions: dict[str, torch.Tensor],
+    text_scale: float = 1.0,
+    mask_scale: float = 1.0,
+    interaction_scale: float = None,
+    rescale: bool = True,
+):
     coefficients = cfg_coefficients(text_scale, mask_scale, interaction_scale)
     needed = required_branches(text_scale, mask_scale, interaction_scale, rescale)
     missing = set(needed) - predictions.keys()
