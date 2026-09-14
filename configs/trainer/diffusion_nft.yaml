@@ -43,6 +43,7 @@ reconstruction_epsilon: 1.0e-5
 old_decay: 0.5
 
 base_seed: 42
+eval_seed: 42
 output_dir: ${project.output_dir}
 checkpoint_dir: ${project.checkpoint_dir}
 evaluation_dir: ${project.evaluation_dir}

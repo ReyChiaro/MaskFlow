@@ -9,7 +9,13 @@ input:
   prompt: ???
   negative_prompt: ""
 
+preprocessing:
+  max_resolution: 1048576
+  divisible_by: 32
+  aspect_ratios: ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"]
+
 checkpoint:
+  lora_scale: 1.0
   sft_path: ReyChiaro/MaskFlow
   sft_weight_name: maskflow-S.safetensors  # Filename when sft_path is a Hugging Face repository ID.
   sft_adapter_name: maskflow
@@ -20,7 +26,7 @@ checkpoint:
 runtime:
   device: cuda
   dtype: bfloat16
-  seed: 42
+  seed: 42  # Each image starts from this seed, independently of other samples.
   num_inference_steps: 50
   text_cfg_scale: 4.0
   mask_cfg_scale: 1.0

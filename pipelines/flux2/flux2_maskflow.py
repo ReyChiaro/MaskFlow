@@ -99,14 +99,19 @@ class Flux2MaskFlow(Flux2):
         return Flux2Pipeline._patchify_latents(mask)
 
     @torch.no_grad()
-    def _prepare_mask_inputs(self, data, training=False):
+    def _prepare_mask_inputs(
+        self,
+        data: Flux2MaskFlowPreprocessOutput,
+        training: bool = False,
+        seed: int | list[int] | None = None,
+    ) -> Flux2MaskFlowForwardOutput:
         # Encode all physical conditions once, independently of condition dropout.
         # All ranks must make exactly one text-encoder call during training,
         # including when that encoder is sharded with FSDP.
         encode_data = data
         if training and not branch_conditions(data.cfg_branch)[0]:
             encode_data = dataclasses.replace(data, prompt=[""] * len(data.prompt))
-        base = super().prepare_eval_inputs(encode_data)
+        base = super().prepare_eval_inputs(encode_data, seed=seed)
         result = Flux2MaskFlowForwardOutput(**{f.name: getattr(base, f.name) for f in dataclasses.fields(base)})
         if getattr(data, "mask", None) is not None:
             result.mask_latents = Flux2Pipeline._pack_latents(self.encode_mask(data.mask))
@@ -149,12 +154,19 @@ class Flux2MaskFlow(Flux2):
         )
 
     @torch.no_grad()
-    def prepare_eval_inputs(self, data, text_cfg_scale=1.0, mask_cfg_scale=1.0, interaction_cfg_scale=None):
+    def prepare_eval_inputs(
+        self,
+        data: Flux2MaskFlowPreprocessOutput,
+        text_cfg_scale: float = 1.0,
+        mask_cfg_scale: float = 1.0,
+        interaction_cfg_scale: float | None = None,
+        seed: int | list[int] | None = None,
+    ) -> Flux2ForwardOutput:
         if getattr(data, "mask", None) is None:
             if mask_cfg_scale != 1.0 or interaction_cfg_scale is not None:
                 raise ValueError("Mask CFG requires source and mask inputs.")
-            return super().prepare_eval_inputs(data, text_cfg_scale)
-        inputs = self._prepare_mask_inputs(data)
+            return super().prepare_eval_inputs(data, text_cfg_scale, seed=seed)
+        inputs = self._prepare_mask_inputs(data, seed=seed)
         prompt_cache = {True: (inputs.prompt_embeds, inputs.text_ids)}
         inputs.cfg_branches = {
             name: self.build_cfg_branch(data, name, inputs, prompt_cache=prompt_cache)

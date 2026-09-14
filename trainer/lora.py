@@ -122,6 +122,7 @@ class MaskFlowTrainer(LoraTrainer):
                     text_cfg_scale=self.text_cfg_scale,
                     mask_cfg_scale=self.mask_cfg_scale,
                     interaction_cfg_scale=self.interaction_cfg_scale,
+                    seed=self.eval_seed,
                 )
                 self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 

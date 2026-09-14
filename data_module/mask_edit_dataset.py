@@ -6,31 +6,30 @@ from typing import Any
 
 import pyarrow.parquet as pq
 import torch
-import torchvision.transforms.v2.functional as T
 
 from data_module.dataset import SchemaDataset
 from data_module.sample_utils import image_name
-from data_module.utils import (
-    center_crop_to_aspect_ratio,
-    crop_image_to_aspect_ratio,
-    reshape_to_divisible_max_resolution,
-)
+from data_module.utils import preprocess_images, ASPECT_RATIOS
 
 
 class MaskEditDataset(SchemaDataset):
     def __init__(
         self,
-        image_root,
-        data_file,
+        image_root: str,
+        data_file: str | None,
         load_start: int | float = 0.0,
         load_end: int | float = 1.0,
         divisible_by: int = 32,
+        max_resolution: int = 1024 * 1024,
+        aspect_ratios: tuple[str, ...] = ASPECT_RATIOS,
         enable_prompt_truncation: bool = False,
         replace_prompt_placeholder_with: str | None = None,
     ):
         super().__init__(image_root, data_file, load_start, load_end)
 
         self.divisible_by = divisible_by
+        self.max_resolution = max_resolution
+        self.aspect_ratios = tuple(aspect_ratios)
         self.replace_prompt_placeholder_with = replace_prompt_placeholder_with
         self.enable_prompt_truncation = enable_prompt_truncation
 
@@ -61,33 +60,20 @@ class MaskEditDataset(SchemaDataset):
             conditions = [self._load_image_tensor(os.path.join(self.image_root, c)) for c in conditions]
         return self._preprocess_sample(sample, target, conditions, image_name(sample))
 
-    def _preprocess_sample(self, sample, target, conditions, name) -> dict[str, Any]:
+    def _preprocess_sample(
+        self,
+        sample: dict[str, Any],
+        target: torch.Tensor | None,
+        conditions: dict[str, torch.Tensor] | list[torch.Tensor],
+        name: str,
+    ) -> dict[str, Any]:
         prompt = sample["prompt"]
         negative_prompt = sample.get("negative_prompt", "")
         edit_instruction = sample.get("edit_instruction", "")
 
-        # Reshape conditions and target
-        reference = target if target is not None else conditions["source"]
-        reference, aspect_ratio = crop_image_to_aspect_ratio(reference)
-        if target is not None:
-            target = reshape_to_divisible_max_resolution(reference, aspect_ratio, divisible_by=self.divisible_by)
-
-        if isinstance(conditions, dict):
-            conditions = {k: center_crop_to_aspect_ratio(c, aspect_ratio) for k, c in conditions.items()}
-            conditions = {
-                k: reshape_to_divisible_max_resolution(
-                    c,
-                    aspect_ratio,
-                    divisible_by=self.divisible_by,
-                    interpolation=T.InterpolationMode.NEAREST if k == "mask" else T.InterpolationMode.BICUBIC,
-                )
-                for k, c in conditions.items()
-            }
-        else:
-            conditions = [center_crop_to_aspect_ratio(c, aspect_ratio) for c in conditions]
-            conditions = [
-                reshape_to_divisible_max_resolution(c, aspect_ratio, divisible_by=self.divisible_by) for c in conditions
-            ]
+        conditions, target = preprocess_images(
+            conditions, target, self.max_resolution, self.divisible_by, self.aspect_ratios
+        )
 
         return {
             "image_name": name,
@@ -119,6 +105,8 @@ class HFMaskEditDataset(MaskEditDataset):
         load_start: int | float = 0.0,
         load_end: int | float = 1.0,
         divisible_by: int = 32,
+        max_resolution: int = 1024 * 1024,
+        aspect_ratios: tuple[str, ...] = ASPECT_RATIOS,
         enable_prompt_truncation: bool = False,
         replace_prompt_placeholder_with: str | None = None,
     ):
@@ -140,11 +128,11 @@ class HFMaskEditDataset(MaskEditDataset):
             load_start=load_start,
             load_end=load_end,
             divisible_by=divisible_by,
+            max_resolution=max_resolution,
+            aspect_ratios=aspect_ratios,
             enable_prompt_truncation=enable_prompt_truncation,
             replace_prompt_placeholder_with=replace_prompt_placeholder_with,
         )
-        # if not self.num_samples:
-        #     raise ValueError("No samples selected; check the Parquet files and load_start/load_end.")
 
     def _load_data_file(self, load_start: int | float = 0.0, load_end: int | float = 1.0):
         samples = []
