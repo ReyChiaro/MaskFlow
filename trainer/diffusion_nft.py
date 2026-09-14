@@ -62,9 +62,16 @@ class DiffusionNFTTrainer(LoraTrainer):
     def __post_init__(self):
         super().__post_init__()
         for name in (
-            "group_size", "rollout_batches_per_round", "inner_epochs", "train_timesteps",
-            "gradient_accumulation_steps", "batch_size_per_process", "num_inference_steps",
-            "max_training_steps", "save_steps", "eval_steps",
+            "group_size",
+            "rollout_batches_per_round",
+            "inner_epochs",
+            "train_timesteps",
+            "gradient_accumulation_steps",
+            "batch_size_per_process",
+            "num_inference_steps",
+            "max_training_steps",
+            "save_steps",
+            "eval_steps",
         ):
             value = getattr(self, name)
             if not isinstance(value, int) or value < 1:
@@ -127,13 +134,21 @@ class DiffusionNFTTrainer(LoraTrainer):
         # Use the existing checkpoint sampler even on one GPU. Count consumed
         # batches ourselves: DataLoader prefetch must not advance the saved cursor.
         self.train_sampler = CheckpointDistributedSampler(
-            self.train_loader.dataset, self.batch_size_per_process, self.world_size,
-            self.global_rank, shuffle=True, seed=self.base_seed, drop_last=True,
+            self.train_loader.dataset,
+            self.batch_size_per_process,
+            self.world_size,
+            self.global_rank,
+            shuffle=True,
+            seed=self.base_seed,
+            drop_last=True,
         )
         self.train_loader = DataLoader(
-            self.train_loader.dataset, batch_size=self.batch_size_per_process,
-            sampler=self.train_sampler, num_workers=self.data_loader_workers,
-            drop_last=True, collate_fn=collate_evaluation,
+            self.train_loader.dataset,
+            batch_size=self.batch_size_per_process,
+            sampler=self.train_sampler,
+            num_workers=self.data_loader_workers,
+            drop_last=True,
+            collate_fn=collate_evaluation,
         )
         if len(self.train_loader) == 0:
             raise ValueError("Dataset must contain at least world_size*batch_size_per_process editing inputs.")
@@ -189,8 +204,10 @@ class DiffusionNFTTrainer(LoraTrainer):
             predictions[name] = self.pipe.denoise(
                 hidden_states=torch.cat([xt] + branch.conditions, dim=1),
                 timesteps=sigma.expand(xt.shape[0]).to(device=self.device, dtype=self._train_dtype),
-                prompt_embeds=branch.prompt_embeds, prompt_embeds_mask=branch.prompt_embeds_mask,
-                img_shapes=branch.image_shapes, img_seq_len=xt.shape[1],
+                prompt_embeds=branch.prompt_embeds,
+                prompt_embeds_mask=branch.prompt_embeds_mask,
+                img_shapes=branch.image_shapes,
+                img_seq_len=xt.shape[1],
             )
         # At scale=1 use the raw velocity, avoiding unnecessary norm rescaling.
         if self.text_cfg_scale == 1.0:
@@ -199,7 +216,8 @@ class DiffusionNFTTrainer(LoraTrainer):
 
     @torch.no_grad()
     def _rollout_group(
-        self, batch: dict,
+        self,
+        batch: dict,
     ) -> tuple[QwenMaskFlowForwardOutput, list[torch.Tensor], torch.Tensor, torch.Tensor]:
         data = self.pipe.preprocess_inputs(batch)
         inputs = self.pipe.prepare_eval_inputs(data, self.text_cfg_scale)
@@ -209,25 +227,51 @@ class DiffusionNFTTrainer(LoraTrainer):
             schedule = [tuple(value.to(self.device) for value in step) for step in steps]
         endpoints, rewards = [], []
         for _ in range(self.group_size):
-            noise = torch.randn(inputs.noise.shape, device=self.device, dtype=inputs.noise.dtype, generator=self.generator)
+            noise = torch.randn(
+                inputs.noise.shape, device=self.device, dtype=inputs.noise.dtype, generator=self.generator
+            )
             xt = noise
             for sigma, curr_sigma, next_sigma, derivative in schedule:
                 prediction = self._predict(inputs, xt, sigma)
-                if self.pipe.enable_poisson_infer and self.pipe.poisson_steps[0] <= sigma.item() <= self.pipe.poisson_steps[1]:
+                if (
+                    self.pipe.enable_poisson_infer
+                    and self.pipe.poisson_steps[0] <= sigma.item() <= self.pipe.poisson_steps[1]
+                ):
                     prediction = self.pipe.apply_poisson_to_prediction(
-                        xt, prediction, curr_sigma, derivative, inputs.conditions[0], inputs.mask_latents,
-                        noise, inputs.height, inputs.width, disable_progress_bar=True,
+                        xt,
+                        prediction,
+                        curr_sigma,
+                        derivative,
+                        inputs.conditions[0],
+                        inputs.mask_latents,
+                        noise,
+                        inputs.height,
+                        inputs.width,
+                        disable_progress_bar=True,
                     )
                 xt = self.pipe.scheduler.step(
-                    xt, prediction, curr_sigma, next_sigma, derivative,
-                    inputs.conditions[0], inputs.mask_latents, noise,
+                    xt,
+                    prediction,
+                    curr_sigma,
+                    next_sigma,
+                    derivative,
+                    inputs.conditions[0],
+                    inputs.mask_latents,
+                    noise,
                 )
-            images = self.pipe.decode_image(QwenImageEditPlusPipeline._unpack_latents(
-                xt, inputs.height, inputs.width, self.pipe.vae_scale_factor,
-            ))
+            images = self.pipe.decode_image(
+                QwenImageEditPlusPipeline._unpack_latents(
+                    xt,
+                    inputs.height,
+                    inputs.width,
+                    self.pipe.vae_scale_factor,
+                )
+            )
             if self.pipe.enable_pixel_blend:
                 images = data.mask * images + (1 - data.mask) * data.raw_source
-            scores = torch.as_tensor(self.reward_fn(images=images, batch=batch), device=self.device, dtype=torch.float32)
+            scores = torch.as_tensor(
+                self.reward_fn(images=images, batch=batch), device=self.device, dtype=torch.float32
+            )
             if scores.shape != (xt.shape[0],) or not torch.isfinite(scores).all():
                 raise ValueError("reward_fn must return one finite scalar per image, shape [B].")
             endpoints.append(xt.detach())
@@ -248,15 +292,21 @@ class DiffusionNFTTrainer(LoraTrainer):
                 dist.all_reduce(variance)
             std = (variance / stats[1]).sqrt().float()
         return [
-            ((r - r.mean(dim=0, keepdim=True)) / (
-                (std if std is not None else r.std(dim=0, keepdim=True, correction=0)) + self.advantage_epsilon
-            )).clamp(-self.advantage_clip, self.advantage_clip)
+            (
+                (r - r.mean(dim=0, keepdim=True))
+                / ((std if std is not None else r.std(dim=0, keepdim=True, correction=0)) + self.advantage_epsilon)
+            ).clamp(-self.advantage_clip, self.advantage_clip)
             for r in rewards
         ]
 
     def _policy_loss(
-        self, actor: torch.Tensor, old: torch.Tensor, xt: torch.Tensor,
-        target: torch.Tensor, sigma: torch.Tensor, advantage: torch.Tensor,
+        self,
+        actor: torch.Tensor,
+        old: torch.Tensor,
+        xt: torch.Tensor,
+        target: torch.Tensor,
+        sigma: torch.Tensor,
+        advantage: torch.Tensor,
     ) -> torch.Tensor:
         sigma = sigma.reshape(-1, *([1] * (xt.ndim - 1)))
         losses = []
@@ -271,10 +321,12 @@ class DiffusionNFTTrainer(LoraTrainer):
     def _train_micro_batch(self, sample: tuple, sync: bool, accumulation_size: int) -> dict[str, float]:
         inputs, x0, advantage, grid = sample
         # Independent uniform sampling without replacement on the rollout grid.
-        indices = torch.stack([
-            torch.randperm(len(grid), device=self.device, generator=self.generator)[:self.train_timesteps]
-            for _ in range(x0.shape[0])
-        ])
+        indices = torch.stack(
+            [
+                torch.randperm(len(grid), device=self.device, generator=self.generator)[: self.train_timesteps]
+                for _ in range(x0.shape[0])
+            ]
+        )
         metrics = {"policy_loss": 0.0, "reference_loss": 0.0}
         for index in range(self.train_timesteps):
             self.set_fsdp_gradient_sync(sync and index == self.train_timesteps - 1)
@@ -284,7 +336,11 @@ class DiffusionNFTTrainer(LoraTrainer):
             # The MaskFlow clean endpoint includes source outside the mask.
             # Computing it via the scheduler also supports its unmask_with modes.
             target = self.pipe.scheduler.add_noise_by_sigmas(
-                noise, x0, torch.zeros_like(sigma), inputs.conditions[0], inputs.mask_latents,
+                noise,
+                x0,
+                torch.zeros_like(sigma),
+                inputs.conditions[0],
+                inputs.mask_latents,
             )
             with self._use_weights(self.old_params):
                 old = self._predict(inputs, xt, sigma).detach()
@@ -305,8 +361,11 @@ class DiffusionNFTTrainer(LoraTrainer):
         return metrics
 
     def train_state_dict(self) -> dict:
-        return {**super().train_state_dict(), "rollout_step": self.rollout_step,
-                "data_batches_consumed": self.data_batches_consumed}
+        return {
+            **super().train_state_dict(),
+            "rollout_step": self.rollout_step,
+            "data_batches_consumed": self.data_batches_consumed,
+        }
 
     def load_train_state_dict(self, state_dict: dict):
         super().load_train_state_dict(state_dict)
@@ -317,18 +376,28 @@ class DiffusionNFTTrainer(LoraTrainer):
         self._reshard_actor()
         super().save_model_checkpoints(checkpoint_dir)
         # Save detached snapshots too: resuming must not silently reset old or ref.
-        DCP.save({"old": self.old_params, "reference": self.reference_params},
-                 checkpoint_id=str(checkpoint_dir / self.nft_state_dict_dir))
-        torch.save({"generator": self.generator.get_state(), "torch": torch.get_rng_state(),
-                    "cuda": torch.cuda.get_rng_state(self.device), "prompt": self.rng.getstate(),
-                    "world_size": self.world_size,
-                    "lr_scheduler": self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None},
-                   checkpoint_dir / self.nft_state_dict_dir / f"rank-{self.global_rank}.pt")
+        DCP.save(
+            {"old": self.old_params, "reference": self.reference_params},
+            checkpoint_id=str(checkpoint_dir / self.nft_state_dict_dir),
+        )
+        torch.save(
+            {
+                "generator": self.generator.get_state(),
+                "torch": torch.get_rng_state(),
+                "cuda": torch.cuda.get_rng_state(self.device),
+                "prompt": self.rng.getstate(),
+                "world_size": self.world_size,
+                "lr_scheduler": self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None,
+            },
+            checkpoint_dir / self.nft_state_dict_dir / f"rank-{self.global_rank}.pt",
+        )
 
     def load_model_checkpoints(self, checkpoint_dir: Path):
         super().load_model_checkpoints(checkpoint_dir)
-        DCP.load({"old": self.old_params, "reference": self.reference_params},
-                 checkpoint_id=str(checkpoint_dir / self.nft_state_dict_dir))
+        DCP.load(
+            {"old": self.old_params, "reference": self.reference_params},
+            checkpoint_id=str(checkpoint_dir / self.nft_state_dict_dir),
+        )
         state = torch.load(checkpoint_dir / self.nft_state_dict_dir / f"rank-{self.global_rank}.pt", weights_only=False)
         if state["world_size"] != self.world_size:
             raise ValueError("NFT resume requires the same world_size to preserve groups and RNG streams.")
@@ -368,15 +437,17 @@ class DiffusionNFTTrainer(LoraTrainer):
                 if not groups:
                     break
                 advantages = self._advantages([group[2] for group in groups])
-                samples = [(inputs, x0, adv[k], grid)
-                           for (inputs, endpoints, _, grid), adv in zip(groups, advantages, strict=True)
-                           for k, x0 in enumerate(endpoints)]
+                samples = [
+                    (inputs, x0, adv[k], grid)
+                    for (inputs, endpoints, _, grid), adv in zip(groups, advantages, strict=True)
+                    for k, x0 in enumerate(endpoints)
+                ]
                 start_step = self.global_step
                 self.pipe.transformer.train()
                 for _ in range(self.inner_epochs):
                     order = torch.randperm(len(samples), generator=self.generator, device=self.device).tolist()
                     for start in range(0, len(samples), self.gradient_accumulation_steps):
-                        chunk = order[start:start + self.gradient_accumulation_steps]
+                        chunk = order[start : start + self.gradient_accumulation_steps]
                         metrics = {"policy_loss": 0.0, "reference_loss": 0.0}
                         for index, sample_index in enumerate(chunk):
                             values = self._train_micro_batch(samples[sample_index], index == len(chunk) - 1, len(chunk))
@@ -397,8 +468,10 @@ class DiffusionNFTTrainer(LoraTrainer):
                         if self.world_size > 1:
                             dist.all_reduce(values)
                             values /= self.world_size
-                        logger.info(f"NFT actor step {self.global_step}/{self.max_training_steps}, "
-                                    f"rollout={self.rollout_step}, loss={values.tolist()}, grad_norm={grad_norm.item():.6f}")
+                        logger.info(
+                            f"NFT actor step {self.global_step}/{self.max_training_steps}, "
+                            f"rollout={self.rollout_step}, loss={values.tolist()}, grad_norm={grad_norm.item():.6f}"
+                        )
                         if self.global_step >= self.max_training_steps:
                             break
                     if self.global_step >= self.max_training_steps:
@@ -409,10 +482,18 @@ class DiffusionNFTTrainer(LoraTrainer):
                 # Checkpoint only at a round boundary: no partially trained
                 # rollout buffer or pending gradient accumulation to serialize.
                 # Crossing a save interval defers it to this boundary.
-                if start_step == 0 or start_step // self.eval_steps < self.global_step // self.eval_steps or self.global_step == self.max_training_steps:
+                if (
+                    start_step == 0
+                    or start_step // self.eval_steps < self.global_step // self.eval_steps
+                    or self.global_step == self.max_training_steps
+                ):
                     self.evaluate(self.global_step, force=True)
                 # Save after evaluation so its RNG consumption is included.
-                if start_step == 0 or start_step // self.save_steps < self.global_step // self.save_steps or self.global_step == self.max_training_steps:
+                if (
+                    start_step == 0
+                    or start_step // self.save_steps < self.global_step // self.save_steps
+                    or self.global_step == self.max_training_steps
+                ):
                     self.save_checkpoints(self.global_step, force=True)
             if exhausted:
                 self.current_epoch += 1

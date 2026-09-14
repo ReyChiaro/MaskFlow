@@ -30,7 +30,8 @@ script/
 viewer/
 checkpoints/
 evaluator/docs/
-tests/*
+tests/
+assets/test/
 .env
 
 launch_*.sh
