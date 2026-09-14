@@ -422,6 +422,70 @@ The adapter names are fixed to `maskflow` for SFT and `dmd` for step distillatio
 
 </details>
 
+## Extract images from Parquet
+
+Extract a selected image column from downloaded MaskEdit-10k shards:
+
+```bash
+python extract_parquet_images.py \
+  --parquet-dir dataset/MaskEdit-10k/data \
+  --key target --output-dir extracted/target
+```
+
+The image keys are `source`, `mask`, and `target`, as defined in the dataset's
+[prepare_dataset.py](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k/blob/main/prepare_dataset.py).
+The script recursively searches all `*.parquet` files in the supplied folder.
+Point `--parquet-dir` at `data/scene` to select one subset, or add
+`--pattern 'test-*.parquet'` to select only test shards.
+
+Images are saved to a flat output directory with their original filenames and
+encoded bytes, preserving format, dimensions, and mask mode without recompression.
+Only the selected column is loaded, in batches of 8 rows (`--batch-size` to change).
+Identical existing images are skipped, including repeated sources across samples;
+same-name files with different contents raise an error instead of being replaced.
+On error, earlier outputs remain available for resuming the extraction.
+The printed report counts Parquet files, rows, written images, and skipped images.
+This script requires only `pyarrow` in addition to the Python standard library.
+
+```python
+from extract_parquet_images import extract_parquet_images
+
+counts = extract_parquet_images(
+    "dataset/MaskEdit-10k/data", "extracted/target", "target",
+    pattern="test-*.parquet",
+)
+```
+
+## Per-image PSNR / SSIM ranking
+
+Rank saved predictions against a target directory:
+
+```bash
+python ordered_matrics.py --pred-dir prediction --target-dir target \
+  --sort-by psnr --output ranking.json
+```
+
+Use `--sort-by ssim` to rank by SSIM instead. Both scores are computed for every
+image, and the JSON list is sorted highest first, breaking ties by filename.
+Images match recursively by relative path without the extension; missing targets
+and ambiguous names raise errors, while extra targets are ignored. Images are
+converted to RGB. Dimensions must match unless `--resize` is supplied, which
+resizes predictions to the target dimensions. Each dimension must be at least 6.
+
+The Python API returns the same list with numeric scores:
+
+```python
+from ordered_matrics import ordered_matrics
+
+results = ordered_matrics("prediction", "target", sort_by="ssim")
+image_names = [row["image"] for row in results]
+```
+
+Each entry contains `image`, `prediction`, `target`, `psnr`, and `ssim`.
+Identical images have infinite PSNR, represented as `float("inf")` in Python and
+the string `"inf"` in JSON. The CLI prints JSON and optionally saves it with
+`--output`.
+
 ## Visualization
 
 MaskFlow supports a diverse range of mask-guided image editing tasks. The comparisons below show that, relative to other models, MaskFlow localizes edits more precisely while better preserving the surrounding content. It also produces smoother transitions between edited and preserved regions, resulting in higher visual fidelity.

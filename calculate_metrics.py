@@ -20,7 +20,6 @@ from torchvision.transforms import functional as TF
 
 from data_module.mask_edit_dataset import HFMaskEditDataset
 from data_module.sample_utils import image_name
-from data_module.mask_edit_dataset import HFMaskEditDataset
 from data_module.utils import (
     center_crop_to_aspect_ratio,
     crop_image_to_aspect_ratio,
