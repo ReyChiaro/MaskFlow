@@ -2,7 +2,7 @@ import importlib
 import os
 import pkgutil
 import sys
-from typing import Callable, Any
+from typing import Any, Callable
 
 
 class DuplicateRegistrationError(Exception):

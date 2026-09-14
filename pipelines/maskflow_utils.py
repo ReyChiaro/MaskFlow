@@ -1,4 +1,5 @@
 """Shared spatial mask operations; model-specific latent codecs stay in their pipelines."""
+
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as T
@@ -99,4 +100,3 @@ def poisson_refine(
         soft_M = soft_M.expand_as(g)
         y = soft_M * y + (1.0 - soft_M) * x_S
     return y
-

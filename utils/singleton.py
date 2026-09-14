@@ -3,7 +3,6 @@ import threading
 
 
 def singleton(cls):
-
     instances = {}
     lock = threading.Lock()
 

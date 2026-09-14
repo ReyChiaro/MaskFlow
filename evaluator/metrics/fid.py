@@ -2,6 +2,7 @@ import torch
 from torchmetrics.image.fid import FrechetInceptionDistance
 
 from evaluator.register import REGISTER_METRIC
+
 from .mask_utils import image_device, iter_image_pairs
 
 

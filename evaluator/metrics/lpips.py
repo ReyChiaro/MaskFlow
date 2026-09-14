@@ -2,6 +2,7 @@ import torch
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from evaluator.register import REGISTER_METRIC
+
 from .mask_utils import image_device, iter_image_pairs, mask_region_pair, mean_metric
 
 
@@ -10,7 +11,10 @@ def LPIPS(source: torch.Tensor, target: torch.Tensor, **kwargs):
     lpips = LearnedPerceptualImagePatchSimilarity(net_type="alex", normalize=True).to(image_device(source))
     with torch.inference_mode():
         return mean_metric(
-            [lpips(source_image, target_image).item() for source_image, target_image, _ in iter_image_pairs(source, target)]
+            [
+                lpips(source_image, target_image).item()
+                for source_image, target_image, _ in iter_image_pairs(source, target)
+            ]
         )
 
 

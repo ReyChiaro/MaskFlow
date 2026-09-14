@@ -5,8 +5,8 @@ import torch.nn.functional as F
 from diffusers.pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 
 from pipelines import maskflow_utils
-from pipelines.cfg import branch_conditions, required_branches, combine_predictions
 from pipelines.base_pipeline import PreprocessOutput
+from pipelines.cfg import branch_conditions, combine_predictions, required_branches
 from pipelines.flux2.flux2 import Flux2, Flux2ForwardOutput
 from schedulers.flux2_flow_matching import Flux2MaskFlowScheduler
 
@@ -141,8 +141,11 @@ class Flux2MaskFlow(Flux2):
                 image_ids.append(inputs.image_ids[:, offset:end])
             offset = end
         return Flux2ForwardOutput(
-            prompt_embeds=prompt_embeds, text_ids=text_ids, conditions=conditions,
-            image_ids=torch.cat(image_ids, dim=1), latent_ids=inputs.latent_ids,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            conditions=conditions,
+            image_ids=torch.cat(image_ids, dim=1),
+            latent_ids=inputs.latent_ids,
         )
 
     @torch.no_grad()
@@ -160,9 +163,7 @@ class Flux2MaskFlow(Flux2):
         return inputs
 
     def combine_cfg_predictions(self, predictions, text_cfg_scale=1.0, mask_cfg_scale=1.0, interaction_cfg_scale=None):
-        return combine_predictions(
-            predictions, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, self.rescale_cfg
-        )
+        return combine_predictions(predictions, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, self.rescale_cfg)
 
     def predict_velocity(self, xt, timestep, inputs, text_cfg_scale, mask_cfg_scale=1.0, interaction_cfg_scale=None):
         if not getattr(inputs, "cfg_branches", None):
@@ -216,7 +217,10 @@ class Flux2MaskFlow(Flux2):
         )
         keep_text, _ = branch_conditions(data.cfg_branch)
         branch = self.build_cfg_branch(
-            data, data.cfg_branch, result, training=True,
+            data,
+            data.cfg_branch,
+            result,
+            training=True,
             prompt_cache={keep_text: (result.prompt_embeds, result.text_ids)},
         )
         result.prompt_embeds = branch.prompt_embeds
@@ -227,8 +231,11 @@ class Flux2MaskFlow(Flux2):
         return result
 
     def compute_loss(self, prediction, inputs):
-        if (not self.enable_masked_loss or getattr(inputs, "mask_latents", None) is None
-                or not branch_conditions(inputs.cfg_branch)[1]):
+        if (
+            not self.enable_masked_loss
+            or getattr(inputs, "mask_latents", None) is None
+            or not branch_conditions(inputs.cfg_branch)[1]
+        ):
             return super().compute_loss(prediction, inputs)
         loss = F.mse_loss(prediction.float(), inputs.ground_truth.float(), reduction="none")
         loss = self.mask_loss_weight * inputs.mask_latents * loss / (inputs.mask_ratio + 1e-6)

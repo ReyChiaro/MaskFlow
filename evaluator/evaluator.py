@@ -1,6 +1,6 @@
-import torch
-
 from dataclasses import dataclass
+
+import torch
 from loguru import logger
 
 from evaluator.register import get_metrics, initialize_metrics
@@ -20,7 +20,6 @@ def _to_device(value, device: torch.device):
 
 @dataclass
 class Evaluator:
-
     def __init__(self, metrics: list[str] | None = None, device: torch.device = torch.device("cpu")):
         initialize_metrics()
         self.device = device
@@ -46,9 +45,9 @@ class Evaluator:
         if needs_reference:
             if targets is None:
                 raise ValueError("Target-free metrics require originals (source images).")
-            assert _num_images(sources) == _num_images(
-                targets
-            ), f"Given sources ({_num_images(sources)}) and targets ({_num_images(targets)}) should contain same num of items."
+            assert _num_images(sources) == _num_images(targets), (
+                f"Given sources ({_num_images(sources)}) and targets ({_num_images(targets)}) should contain same num of items."
+            )
 
         sources = _to_device(sources, self.device)
         targets = _to_device(targets, self.device)

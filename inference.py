@@ -1,8 +1,8 @@
+from pathlib import Path
+
 import hydra
 import torch
 import torchvision.transforms.functional as T
-
-from pathlib import Path
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import DictConfig
@@ -42,8 +42,11 @@ def main(cfg: DictConfig) -> None:
     source = load_image(cfg.input.source)
     mask = load_image(cfg.input.mask)
     result = pipeline.eval_step(
-        {"prompt": [cfg.input.prompt], "negative_prompt": [cfg.input.get("negative_prompt", "")],
-         "conditions": {"source": source, "mask": mask}},
+        {
+            "prompt": [cfg.input.prompt],
+            "negative_prompt": [cfg.input.get("negative_prompt", "")],
+            "conditions": {"source": source, "mask": mask},
+        },
         num_inference_steps=cfg.runtime.num_inference_steps,
         text_cfg_scale=cfg.runtime.text_cfg_scale,
         mask_cfg_scale=cfg.runtime.get("mask_cfg_scale", 1.0),

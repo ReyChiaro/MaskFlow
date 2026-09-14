@@ -1,11 +1,11 @@
+from dataclasses import dataclass, field
+
 import torch.distributed as dist
+from loguru import logger
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
-from dataclasses import dataclass, field
-from loguru import logger
-
-from trainer.parallel.utils import get_world_size
 from trainer.parallel.fsdp_strategy import FSDPStrategy
+from trainer.parallel.utils import get_world_size
 from utils.singleton import singleton
 
 

@@ -1,49 +1,45 @@
-import os
 import json
 import math
+import os
 import random
-import numpy as np
+from dataclasses import dataclass
+from datetime import timedelta
+from pathlib import Path
+from typing import Literal
 
+import numpy as np
 import torch
-import torch.nn.functional as F
 import torch.distributed as dist
 import torch.distributed.checkpoint as DCP
+import torch.nn.functional as F
+from diffusers.optimization import get_scheduler
+from diffusers.utils.torch_utils import is_compiled_module
+from hydra.utils import instantiate
+from loguru import logger
+from omegaconf import OmegaConf
 from torch.distributed.checkpoint.state_dict import (
-    get_model_state_dict,
-    set_model_state_dict,
-    get_optimizer_state_dict,
-    set_optimizer_state_dict,
     StateDictOptions,
+    get_model_state_dict,
+    get_optimizer_state_dict,
+    set_model_state_dict,
+    set_optimizer_state_dict,
 )
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
 from torchvision.utils import save_image
 
-from diffusers.optimization import get_scheduler
-from diffusers.utils.torch_utils import is_compiled_module
-
-from pathlib import Path
-from dataclasses import dataclass
-from datetime import timedelta
-from typing import Literal
-from omegaconf import OmegaConf
-from hydra.utils import instantiate
-from loguru import logger
-
-from pipelines.base_pipeline import BasePipeline
-from data_module.dataset import SchemaDataset
 from data_module.dataloader import get_dataloader
-from utils.summary import get_summary_table
-from utils.logger import setup_logger
-
+from data_module.dataset import SchemaDataset
+from pipelines.base_pipeline import BasePipeline
 from trainer.parallel.fsdp_strategy import FSDPStrategy
 from trainer.parallel.handler import parallel_handler
-from trainer.parallel.utils import is_main_process, wait_for_everyone, is_fsdp_module
+from trainer.parallel.utils import is_fsdp_module, is_main_process, wait_for_everyone
+from utils.logger import setup_logger
+from utils.summary import get_summary_table
 
 
 @dataclass
 class BaseTrainer:
-
     # Modules
     pipe_configs: OmegaConf | None = None
     optimizer_configs: OmegaConf | None = None
@@ -369,7 +365,9 @@ class BaseTrainer:
         - Data sampler
         - Model: checkpoints of *trainable* parameters of trasnformer by default.
         """
-        if not (force or global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps):
+        if not (
+            force or global_step == 1 or (global_step % self.save_steps == 0) or global_step == self.max_training_steps
+        ):
             return
 
         checkpoint_dir = Path(self.checkpoint_dir) / f"step-{global_step}"
@@ -480,10 +478,7 @@ class BaseTrainer:
 
             source_name = image_name[batch_idx] if image_name is not None else "sample"
             source_name = self._safe_eval_file_component(source_name)
-            save_name = (
-                f"{source_name}__rank-{self.global_rank:01d}"
-                f"_batch-{dataloader_step:04d}_item-{batch_idx:04d}"
-            )
+            save_name = f"{source_name}__rank-{self.global_rank:01d}_batch-{dataloader_step:04d}_item-{batch_idx:04d}"
 
             max_h = max([t.shape[-2] for t in tensors])
             tensors = [
@@ -617,7 +612,9 @@ class BaseTrainer:
     def evaluate(self, global_step: int, force: bool = False):
         if self.eval_loader is None:
             return
-        if not (force or global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps):
+        if not (
+            force or global_step == 1 or (global_step % self.eval_steps == 0) or global_step == self.max_training_steps
+        ):
             return
 
         save_dir = Path(self.evaluation_dir) / f"step-{global_step}"
@@ -633,7 +630,9 @@ class BaseTrainer:
             for step, batch in enumerate(self.eval_loader):
                 batch = self.preprocess_eval_batch(batch, global_step)
                 output: dict[str, torch.Tensor] = self.pipe.eval_step(
-                    batch, self.num_inference_steps, text_cfg_scale=self.text_cfg_scale,
+                    batch,
+                    self.num_inference_steps,
+                    text_cfg_scale=self.text_cfg_scale,
                 )
                 self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 
