@@ -1,22 +1,21 @@
-import torch
-import torch.distributed as dist
-import torch.distributed.checkpoint as DCP
-import torch.nn.functional as F
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import torch
+import torch.distributed as dist
+import torch.distributed.checkpoint as DCP
+import torch.nn.functional as F
 from diffusers.optimization import get_scheduler
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import OmegaConf
 from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
     get_model_state_dict,
     get_optimizer_state_dict,
     set_model_state_dict,
     set_optimizer_state_dict,
-    StateDictOptions,
 )
 
 from trainer.base_trainer import BaseTrainer
@@ -202,8 +201,7 @@ class DMDTrainer(BaseTrainer):
         text_scale, mask_scale = self._teacher_cfg_scales()
         branches = model_inputs.cfg_branches
         predictions = {
-            name: self._predict_branch(self.teacher_transformer, branch, xt, sigma)
-            for name, branch in branches.items()
+            name: self._predict_branch(self.teacher_transformer, branch, xt, sigma) for name, branch in branches.items()
         }
         return self.pipe.combine_cfg_predictions(
             predictions,
@@ -215,8 +213,7 @@ class DMDTrainer(BaseTrainer):
     def _poisson_enabled(self, sigma: torch.Tensor) -> bool:
         sigma_value = sigma.flatten()[0].item()
         return (
-            self.pipe.enable_poisson_infer
-            and self.pipe.poisson_steps[0] <= sigma_value <= self.pipe.poisson_steps[1]
+            self.pipe.enable_poisson_infer and self.pipe.poisson_steps[0] <= sigma_value <= self.pipe.poisson_steps[1]
         )
 
     def _apply_poisson(self, model_inputs, xt, pred, sigma, d_sigma_dt, noise):
@@ -259,9 +256,7 @@ class DMDTrainer(BaseTrainer):
             next_sigma = next_sigma.to(self.device)
             d_sigma_dt = d_sigma_dt.to(self.device)
 
-            step_requires_grad = requires_grad and (
-                self.student_gradient_mode == "full" or step == end_step
-            )
+            step_requires_grad = requires_grad and (self.student_gradient_mode == "full" or step == end_step)
             if step_requires_grad and self.student_gradient_mode == "last_step":
                 xt = xt.detach()
 
@@ -366,12 +361,8 @@ class DMDTrainer(BaseTrainer):
                 sigma,
             )
             teacher_pred = self._predict_teacher(model_inputs, xt, sigma)
-            fake_x0 = self._project_score_prediction(
-                model_inputs, xt, fake_pred, sigma, d_sigma_dt, score_noise
-            )
-            teacher_x0 = self._project_score_prediction(
-                model_inputs, xt, teacher_pred, sigma, d_sigma_dt, score_noise
-            )
+            fake_x0 = self._project_score_prediction(model_inputs, xt, fake_pred, sigma, d_sigma_dt, score_noise)
+            teacher_x0 = self._project_score_prediction(model_inputs, xt, teacher_pred, sigma, d_sigma_dt, score_noise)
             normalizer = (generated.detach().float() - teacher_x0.float()).abs()
             normalizer = normalizer.reshape(normalizer.shape[0], -1).mean(dim=1)
             normalizer = normalizer.clamp_min(self.dmd_normalizer_min).view(-1, 1, 1)

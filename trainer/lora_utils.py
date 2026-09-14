@@ -1,15 +1,14 @@
 import json
 
 import torch
+from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
+from diffusers.loaders.peft import PeftAdapterMixin
 from loguru import logger
 from omegaconf import OmegaConf
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
-
-from diffusers.loaders.peft import PeftAdapterMixin
-from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
-from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
 
 
 def add_trainable_lora(
@@ -75,7 +74,6 @@ def load_inference_loras(transformer: torch.nn.Module, checkpoint_cfgs: OmegaCon
             transformer,
             sft_path,
             checkpoint_cfgs.get("sft_adapter_name", "maskflow"),
-            weight_name=checkpoint_cfgs.get("sft_weight_name"),
         )
 
     if dmd_path:

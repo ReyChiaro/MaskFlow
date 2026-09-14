@@ -34,8 +34,8 @@ class DINOv2Reward(RewardModel):
         scores = []
         for start in range(0, len(images), self.batch_size):
             count = min(self.batch_size, len(images) - start)
-            pairs = list(images[start:start + count].detach().cpu().float())
-            pairs.extend(reference[start:start + count].detach().cpu().float())
+            pairs = list(images[start : start + count].detach().cpu().float())
+            pairs.extend(reference[start : start + count].detach().cpu().float())
             inputs = self.processor(images=pairs, return_tensors="pt", do_rescale=False).to(self.device)
             features = F.normalize(self.model(**inputs).last_hidden_state[:, 0].float(), dim=-1)
             scores.append((features[:count] * features[count:]).sum(-1))

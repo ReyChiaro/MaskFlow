@@ -2,6 +2,7 @@ import torch
 from torchmetrics.functional.image.dists import DISTSNetwork
 
 from evaluator.register import REGISTER_METRIC
+
 from .mask_utils import RegionalImages, image_device, iter_image_pairs, mean_metric
 
 _MODEL_CACHE = {}
@@ -20,10 +21,12 @@ def _load_model(device):
 def DISTS(source, target, **kwargs):
     """Mean full-image DISTS distance for RGB images in [0, 1]; lower is better."""
     model = _load_model(image_device(source))
-    return mean_metric([
-        model(prediction.float(), reference.float()).mean().item()
-        for prediction, reference, _ in iter_image_pairs(source, target)
-    ])
+    return mean_metric(
+        [
+            model(prediction.float(), reference.float()).mean().item()
+            for prediction, reference, _ in iter_image_pairs(source, target)
+        ]
+    )
 
 
 @REGISTER_METRIC("DISTS-FG")

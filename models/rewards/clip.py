@@ -29,9 +29,12 @@ class CLIPReward(RewardModel):
         scores = []
         for start in range(0, len(images), self.batch_size):
             inputs = self.processor(
-                text=list(prompts[start:start + self.batch_size]),
-                images=list(images[start:start + self.batch_size].detach().cpu().float()),
-                return_tensors="pt", padding=True, truncation=True, do_rescale=False,
+                text=list(prompts[start : start + self.batch_size]),
+                images=list(images[start : start + self.batch_size].detach().cpu().float()),
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                do_rescale=False,
                 max_length=self.model.config.text_config.max_position_embeddings,
             ).to(self.device)
             output = self.model(**inputs)

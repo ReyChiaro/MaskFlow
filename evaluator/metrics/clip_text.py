@@ -2,6 +2,7 @@ import torch
 from transformers import CLIPModel, CLIPProcessor
 
 from evaluator.register import REGISTER_METRIC
+
 from .mask_utils import RegionalImages, image_device, image_list, mean_metric
 
 CLIP_MODEL_ID = "/root/models/intern-xr/clip-vit-large-patch14-336"
@@ -33,10 +34,13 @@ def CLIP_TEXT(source, target=None, prompts=None, clip_model_id=CLIP_MODEL_ID, cl
     scores = []
     for start in range(0, len(images), clip_batch_size):
         inputs = processor(
-            text=list(prompts[start:start + clip_batch_size]),
+            text=list(prompts[start : start + clip_batch_size]),
             images=[images[i].detach().cpu().float() for i in range(start, min(start + clip_batch_size, len(images)))],
-            return_tensors="pt", padding=True, truncation=True,
-            max_length=model.config.text_config.max_position_embeddings, do_rescale=False,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=model.config.text_config.max_position_embeddings,
+            do_rescale=False,
         )
         inputs = {key: value.to(device) for key, value in inputs.items()}
         outputs = model(**inputs)

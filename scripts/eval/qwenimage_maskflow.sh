@@ -33,13 +33,13 @@ python -m torch.distributed.run \
     evalset.split=test \
     evalset.load_end=1.0 \
     adapter@sft_adapter=qwenimage_lora \
-    adapters.sft.path="outputs/experiments/QwenImage-MaskFlow-r256/20260913-030556/checkpoints/step-1250/lora_adapter/pytorch_lora_weights.safetensors" \
+    adapters.sft.path="outputs/experiments/QwenImage-MaskFlow-r256/20260913-184451-1162441-1/pm0.9-pn0-nm0.1-nn0/textcfg-4.0-maskcfg-1.0-intecfg-null/checkpoints/step-1250/lora_adapter/pytorch_lora_weights.safetensors" \
     base_seed=42 \
     weight_dtype=bf16 \
     batch_size_per_process=1 \
     num_workers=8 \
     text_cfg_scale=4.0 \
-    mask_cfg_scale=1.25 \
-    interaction_cfg_scale=4.25 \
+    mask_cfg_scale=1.0 \
+    interaction_cfg_scale=null \
     num_inference_steps=50 \
     eval_with_position_prompt=false \

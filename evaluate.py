@@ -142,8 +142,7 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
             **cfg_kwargs,
         )
         for i, image_name in enumerate(batch["image_name"]):
-            extension = "png" if batch.get("target", False) is None else "jpg"
-            pred_path = prediction_dir / f"{image_name}.{extension}"
+            pred_path = prediction_dir / f"{image_name}.png"
             mask_path = mask_dir / f"{image_name}.png"
             pred_path.parent.mkdir(parents=True, exist_ok=True)
             mask_path.parent.mkdir(parents=True, exist_ok=True)

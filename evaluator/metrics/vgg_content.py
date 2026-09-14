@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from torchvision.models import VGG16_Weights, vgg16
 
 from evaluator.register import REGISTER_METRIC
+
 from .mask_utils import iter_image_pairs, mask_region_pair, mean_metric
 
 _VGG_CONTENT_MODELS: dict[str, torch.nn.Module] = {}

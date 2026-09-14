@@ -1,26 +1,23 @@
-import torch
 import dataclasses
-
-from diffusers.models.modeling_utils import ModelMixin
-from diffusers.loaders.peft import PeftAdapterMixin
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from diffusers.schedulers.scheduling_utils import SchedulerMixin
-
-from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
-
-from loguru import logger
-from PIL import Image
 from typing import Any, Iterable
 
-from utils.summary import summarize_model
+import torch
+from diffusers.loaders.peft import PeftAdapterMixin
+from diffusers.models.modeling_utils import ModelMixin
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers.schedulers.scheduling_utils import SchedulerMixin
+from loguru import logger
+from PIL import Image
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
 from pipelines.utils import get_nested_attr
-from trainer.parallel.handler import parallel_handler
 from trainer.parallel.fsdp_strategy import FSDPStrategy
+from trainer.parallel.handler import parallel_handler
+from utils.summary import summarize_model
 
 
 @dataclasses.dataclass
 class PreprocessOutput:
-
     prompt: str | list[str] | None = None
     negative_prompt: str | list[str] | None = None
     vlm_conditions: list[torch.Tensor] | dict[str, torch.Tensor] | None = None
@@ -32,7 +29,6 @@ class PreprocessOutput:
 
 @dataclasses.dataclass
 class ForwardOutput:
-
     prompt_embeds: torch.Tensor | None = None
     prompt_embeds_mask: torch.Tensor | None = None
 

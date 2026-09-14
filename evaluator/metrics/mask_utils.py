@@ -58,8 +58,10 @@ def iter_image_pairs(
                 f"got {tuple(pair_mask.shape[-2:])}."
             )
 
-        yield source_image.unsqueeze(0), target_image.unsqueeze(0), (
-            None if pair_mask is None else pair_mask.unsqueeze(0)
+        yield (
+            source_image.unsqueeze(0),
+            target_image.unsqueeze(0),
+            (None if pair_mask is None else pair_mask.unsqueeze(0)),
         )
 
 
