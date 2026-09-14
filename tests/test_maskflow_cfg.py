@@ -16,6 +16,7 @@ from pipelines.cfg import BRANCHES, cfg_coefficients, combine_predictions, requi
 from pipelines.qwenimage.qwenimage_maskflow import QwenImageMaskFlow, QwenMaskFlowPreprocessOutput
 from pipelines.flux2.flux2_maskflow import Flux2MaskFlow, Flux2MaskFlowPreprocessOutput
 from schedulers.mask_flow import MaskFlowScheduler
+from schedulers.flux2_flow_matching import Flux2MaskFlowScheduler
 from trainer.lora import MaskFlowTrainer
 import inference
 
@@ -88,6 +89,94 @@ def flux_fixture():
     return pipe, data
 
 
+class BackgroundPathTests(unittest.TestCase):
+    def setUp(self):
+        generator = torch.Generator().manual_seed(7)
+        self.noise, self.target, self.source = [
+            torch.randn(2, 5, 4, generator=generator) for _ in range(3)
+        ]
+        self.mask = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0])[None, :, None]
+        self.sigmas = torch.tensor([0.35, 0.8])
+
+    def test_default_matches_original_and_other_modes_ignore_power(self):
+        scheduler = MaskFlowScheduler()
+        sigma = self.sigmas[:, None, None]
+        clean = self.mask * self.target + (1 - self.mask) * self.source
+        xt = scheduler.add_noise_by_sigmas(self.noise, self.target, self.sigmas, self.source, self.mask)
+        torch.testing.assert_close(xt, (1 - sigma) * clean + sigma * self.noise)
+        velocity = scheduler.get_velocity(self.noise, self.target, self.source, self.mask)
+        torch.testing.assert_close(velocity, self.noise - clean)
+        torch.testing.assert_close(
+            scheduler.predict_x0(xt, self.sigmas, None, velocity), clean
+        )
+        current, following = torch.tensor(0.8), torch.tensor(0.6)
+        expected = self.mask * (xt + (following - current) * velocity) + (1 - self.mask) * (
+            (1 - following) * self.source + following * self.noise
+        )
+        torch.testing.assert_close(
+            scheduler.step(xt, velocity, current, following, None, self.source, self.mask, self.noise),
+            expected,
+        )
+        for mode in ("source", "target", "noisy_target"):
+            original = MaskFlowScheduler(unmask_with=mode)
+            changed = MaskFlowScheduler(unmask_with=mode, background_noise_power=2.0)
+            args = (self.noise, self.target, self.sigmas, self.source, self.mask)
+            torch.testing.assert_close(original.add_noise_by_sigmas(*args), changed.add_noise_by_sigmas(*args))
+            args = (self.noise, self.target, self.source, self.mask)
+            torch.testing.assert_close(original.get_velocity(*args), changed.get_velocity(*args))
+            args = (xt, velocity, current, following, None, self.source, self.mask, self.noise)
+            torch.testing.assert_close(original.step(*args), changed.step(*args))
+
+    def test_velocity_matches_finite_difference_after_time_shift(self):
+        for gamma in (1.5, 2.0):
+            for power in (1, 2):
+                scheduler = MaskFlowScheduler(background_noise_power=gamma, shift_power=power)
+                sigmas = scheduler.get_sigmas(torch.tensor([0.3, 0.65]), img_seq_len=1024)
+                for mask in (self.mask, (self.mask >= 0.5).float()):
+                    def path(sigma):
+                        return scheduler.add_noise_by_sigmas(self.noise, self.target, sigma, self.source, mask)
+
+                    delta = 1e-3
+                    difference = (path(sigmas + delta) - path(sigmas - delta)) / (2 * delta)
+                    velocity = scheduler.get_velocity(
+                        self.noise, self.target, self.source, mask, sigmas=sigmas
+                    )
+                    torch.testing.assert_close(velocity, difference, atol=3e-4, rtol=3e-4)
+                    clean = scheduler.predict_x0(
+                        path(sigmas), sigmas, None, velocity, self.source, mask, self.noise
+                    )
+                    torch.testing.assert_close(clean, mask * self.target + (1 - mask) * self.source)
+
+    def test_background_projection_and_endpoints(self):
+        scheduler = MaskFlowScheduler(background_noise_power=2.0)
+        for sigma, expected in (
+            (torch.tensor(1.0), self.noise),
+            (torch.tensor(0.0), self.mask * self.target + (1 - self.mask) * self.source),
+        ):
+            torch.testing.assert_close(
+                scheduler.add_noise_by_sigmas(self.noise, self.target, sigma, self.source, self.mask), expected
+            )
+        for next_sigma in (torch.tensor(0.4), torch.tensor(0.0)):
+            # Background recovery must not depend on the network's background error.
+            xt = scheduler.step(
+                self.noise, torch.full_like(self.noise, 9.0), torch.tensor(0.8), next_sigma,
+                None, self.source, self.mask, self.noise,
+            )
+            background = (1 - next_sigma.square()) * self.source + next_sigma.square() * self.noise
+            torch.testing.assert_close(xt[:, 0], background[:, 0])
+
+    def test_flux_wrapper_forwards_power_and_sigma(self):
+        wrapper = Flux2MaskFlowScheduler(background_noise_power=2.0)
+        direct = MaskFlowScheduler(background_noise_power=2.0)
+        args = (self.noise, self.target, self.sigmas, self.source, self.mask)
+        torch.testing.assert_close(wrapper.add_noise_by_sigmas(*args), direct.add_noise_by_sigmas(*args))
+        args = (self.noise, self.target, self.source, self.mask)
+        torch.testing.assert_close(
+            wrapper.get_velocity(*args, sigmas=self.sigmas), direct.get_velocity(*args, sigmas=self.sigmas)
+        )
+
+
+
 class CFGAlgebraTests(unittest.TestCase):
     def test_legacy_text_guidance_and_rescaling(self):
         torch.manual_seed(12)
@@ -146,6 +235,41 @@ class TrainerTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_background_power_training_and_poisson_conversion(self):
+        for factory in (qwen_fixture, flux_fixture):
+            for gamma in (1.0, 2.0):
+                with self.subTest(model=factory.__name__, gamma=gamma):
+                    pipe, data = factory()
+                    pipe.scheduler.background_noise_power = gamma
+                    pipe.scheduler.weighting_scheme = 'logit_normal'
+                    inputs = pipe.prepare_forward_inputs(data)
+                    sigma = inputs.sigmas.squeeze()
+                    source, mask, noise = inputs.source_latents, inputs.mask_latents, inputs.noise
+                    xt, velocity = inputs.noised_target, inputs.ground_truth
+                    expected_clean = mask * (source + 1) + (1 - mask) * source
+                    torch.testing.assert_close(
+                        pipe.scheduler.predict_x0(xt, sigma, None, velocity, source, mask, noise),
+                        expected_clean,
+                    )
+                    # A controlled edit of the clean estimate must be reflected in the velocity.
+                    with patch('pipelines.maskflow_utils.poisson_refine', side_effect=lambda g, *a, **kw: g + 0.125):
+                        if factory is qwen_fixture:
+                            refined_velocity = pipe.apply_poisson_to_prediction(
+                                xt, velocity, sigma, torch.ones_like(sigma), source, mask, noise,
+                                inputs.height, inputs.width, disable_progress_bar=True,
+                            )
+                        else:
+                            pipe.enable_poisson_infer = True
+                            pipe.poisson_steps = [0.0, 1.0]
+                            with patch.object(pipe.scheduler, 'step', side_effect=lambda xt, v, *a: v):
+                                refined_velocity = pipe.inference_step(
+                                    xt, velocity, sigma, sigma / 2, torch.ones_like(sigma), inputs
+                                )
+                    refined_clean = pipe.scheduler.predict_x0(
+                        xt, sigma, None, refined_velocity, source, mask, noise
+                    )
+                    torch.testing.assert_close(refined_clean, expected_clean + 0.125)
+
     def test_dropout_preserves_path_target_and_source_for_both_models(self):
         for factory in (qwen_fixture, flux_fixture):
             for poisson in (False, True):
@@ -282,10 +406,14 @@ class PipelineTests(unittest.TestCase):
         with initialize_config_dir(config_dir=config_dir, version_base=None):
             for name in ('sft_maskflow', 'sft_flux2_maskflow'):
                 cfg = compose(config_name=name)
+                self.assertEqual(cfg.pipeline.scheduler.background_noise_power, 1.0)
+                changed = compose(config_name=name, overrides=['pipeline.scheduler.background_noise_power=2.0'])
+                self.assertEqual(changed.pipeline.scheduler.background_noise_power, 2.0)
                 self.assertEqual(set(cfg.trainer.cfg_branch_probabilities), set(BRANCHES))
                 training_probabilities(cfg.trainer.cfg_branch_probabilities)
             for overrides in ([], ['pipeline=flux2_maskflow']):
                 cfg = compose(config_name='inference', overrides=overrides)
+                self.assertEqual(cfg.pipeline.scheduler.background_noise_power, 1.0)
                 self.assertEqual(cfg.runtime.mask_cfg_scale, 1.)
                 self.assertIn('maskflow', cfg.pipeline._target_)
 

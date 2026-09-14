@@ -72,3 +72,4 @@ scheduler:
   time_shift_type: exponential
   use_dynamic_shifting: true
   unmask_with: noisy_source
+  background_noise_power: 1.0  # >= 1; higher values reveal the source background earlier.
