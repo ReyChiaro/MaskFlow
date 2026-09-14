@@ -225,7 +225,7 @@ class Flux2MaskFlow(Flux2):
             result.mask_latents,
         )
         result.ground_truth = self.scheduler.get_velocity(
-            result.noise, target, result.source_latents, result.mask_latents
+            result.noise, target, result.source_latents, result.mask_latents, sigmas=result.sigmas
         )
         keep_text, _ = branch_conditions(data.cfg_branch)
         branch = self.build_cfg_branch(
@@ -257,10 +257,17 @@ class Flux2MaskFlow(Flux2):
         if inputs.mask_latents is None:
             return super().inference_step(xt, prediction, sigma, next_sigma, derivative, inputs)
         if self.enable_poisson_infer and self.poisson_steps[0] <= sigma.item() <= self.poisson_steps[1]:
-            x0 = self.scheduler.predict_x0(xt, sigma, derivative, prediction)
-            x0 = Flux2Pipeline._unpack_latents_with_ids(x0, inputs.latent_ids)
+            x0_pred = self.scheduler.predict_x0(
+                xt.float(), sigma, derivative, prediction,
+                inputs.source_latents, inputs.mask_latents, inputs.noise,
+            )
+            x0 = Flux2Pipeline._unpack_latents_with_ids(x0_pred.to(xt.dtype), inputs.latent_ids)
             refined = Flux2Pipeline._pack_latents(self.refine_target(x0, inputs))
-            prediction = (xt - refined) / sigma.clamp_min(1e-4)
+            if self.scheduler.unmask_with != "noisy_source" or self.scheduler.background_noise_power == 1.0:
+                prediction = (xt - refined) / sigma.clamp_min(1e-4)
+            else:
+                # The nonlinear path correction cancels between the two clean estimates.
+                prediction = prediction.float() + (x0_pred - refined.float()) / sigma.clamp_min(1e-4)
         return self.scheduler.step(
             xt,
             prediction,

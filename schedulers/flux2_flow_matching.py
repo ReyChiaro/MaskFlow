@@ -66,18 +66,21 @@ class Flux2MaskFlowScheduler(Flux2FlowMatchingScheduler):
     """Compose the FLUX.2 time schedule with the existing MaskFlow dynamics."""
 
     unmask_with: str = "noisy_source"
+    background_noise_power: float = 1.0
 
     def __post_init__(self):
         super().__post_init__()
         if self.unmask_with not in {"source", "target", "noisy_source", "noisy_target"}:
             raise ValueError(f"Unsupported unmask_with: {self.unmask_with}")
-        self._mask_scheduler = MaskFlowScheduler(unmask_with=self.unmask_with)
+        self._mask_scheduler = MaskFlowScheduler(
+            unmask_with=self.unmask_with, background_noise_power=self.background_noise_power
+        )
 
     def add_noise_by_sigmas(self, noise, x0, sigmas, source=None, mask=None):
         return self._mask_scheduler.add_noise_by_sigmas(noise, x0, sigmas, source, mask)
 
-    def get_velocity(self, noise, x0, source=None, mask=None):
-        return self._mask_scheduler.get_velocity(noise, x0, source, mask)
+    def get_velocity(self, noise, x0, source=None, mask=None, *, sigmas: torch.Tensor | None = None):
+        return self._mask_scheduler.get_velocity(noise, x0, source, mask, sigmas=sigmas)
 
     def step(self, xt, vt, curr_sigma, next_sigma, d_sigma_dt, source=None, mask=None, noise=None):
         return self._mask_scheduler.step(xt, vt, curr_sigma, next_sigma, d_sigma_dt, source, mask, noise)

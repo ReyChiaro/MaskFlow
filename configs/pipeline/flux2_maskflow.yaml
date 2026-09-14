@@ -23,3 +23,4 @@ poisson_momentum: 0.1
 scheduler:
   _target_: schedulers.flux2_flow_matching.Flux2MaskFlowScheduler
   unmask_with: noisy_source
+  background_noise_power: 1.0  # >= 1; higher values reveal the source background earlier.

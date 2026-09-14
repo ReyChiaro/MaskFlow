@@ -275,7 +275,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         sigmas = self.scheduler.get_sigmas(ts, img_seq_len=tgt.shape[1])
 
         xt = self.scheduler.add_noise_by_sigmas(noise, tgt, sigmas, source, mask_latents)
-        gt = self.scheduler.get_velocity(noise, tgt, source, mask_latents)
+        gt = self.scheduler.get_velocity(noise, tgt, source, mask_latents, sigmas=sigmas)
 
         branch = self.build_cfg_branch(
             preprocessed_data, preprocessed_data.cfg_branch, cond_latents, image_shapes, training=True
@@ -477,8 +477,12 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             mask_latents, height, width, self.vae_scale_factor
         ).squeeze(2)
 
-        x0_pred = self.scheduler.predict_x0(xt, curr_sigma, d_sigma_dt, pred, source, mask_latents, noise)
-        x0_dtype = x0_pred.dtype
+        # Keep the estimate in fp32 for the inverse conversion after refinement.
+        x0_pred_packed = self.scheduler.predict_x0(
+            xt.float(), curr_sigma, d_sigma_dt, pred, source, mask_latents, noise
+        )
+        x0_dtype = xt.dtype
+        x0_pred = x0_pred_packed.to(dtype=x0_dtype)
         x0_pred = QwenImageEditPlusPipeline._unpack_latents(x0_pred, height, width, self.vae_scale_factor).squeeze(2)
         x0_refined = maskflow_utils.poisson_refine(
             g=x0_pred,
@@ -500,7 +504,10 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         ).to(dtype=x0_dtype)
         while curr_sigma.ndim < xt.ndim:
             curr_sigma = curr_sigma.unsqueeze(-1)
-        return (xt - x0_refined) / curr_sigma.clamp_min(1e-4)
+        if self.scheduler.unmask_with != "noisy_source" or self.scheduler.background_noise_power == 1.0:
+            return (xt - x0_refined) / curr_sigma.clamp_min(1e-4)
+        # The nonlinear path correction cancels between the two clean estimates.
+        return pred.float() + (x0_pred_packed - x0_refined.float()) / curr_sigma.clamp_min(1e-4)
 
     @torch.inference_mode()
     def eval_step(
