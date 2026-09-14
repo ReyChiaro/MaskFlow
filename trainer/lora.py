@@ -1,15 +1,15 @@
-import torch
 import dataclasses
-
 from pathlib import Path
-from typing import Literal
-from omegaconf import OmegaConf
+
+import torch
 from loguru import logger
+from omegaconf import OmegaConf
+
+from pipelines.cfg import training_probabilities
 from trainer.base_trainer import BaseTrainer
 from trainer.lora_utils import add_trainable_lora, save_lora_adapter
 from trainer.parallel.utils import wait_for_everyone
 from trainer.prompt_sampler.prompt_sampler import PromptSampler
-from pipelines.cfg import training_probabilities
 
 
 @dataclasses.dataclass

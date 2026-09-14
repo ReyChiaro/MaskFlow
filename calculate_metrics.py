@@ -18,6 +18,7 @@ from loguru import logger
 from PIL import Image
 from torchvision.transforms import functional as TF
 
+from data_module.mask_edit_dataset import HFMaskEditDataset
 from data_module.sample_utils import image_name
 from data_module.mask_edit_dataset import HFMaskEditDataset
 from data_module.utils import (
@@ -297,7 +298,9 @@ class EvaluationData:
             value = (
                 self.keys[index]
                 if role == "prediction"
-                else row.get("target") if role == "target" else conditions.get(role)
+                else row.get("target")
+                if role == "target"
+                else conditions.get(role)
             )
             # Prediction keys have no suffix. Add a synthetic suffix so dotted IDs survive resolution.
             if role == "prediction" and value:
@@ -663,7 +666,7 @@ def main():
     parser.add_argument("--prompt-key", default="prompt", help="Top-level text field in JSONL or HF metadata")
     parser.add_argument("--preprocess", choices=["mask-edit", "resize"], default="mask-edit")
     parser.add_argument("--divisible-by", type=int, default=32)
-    parser.add_argument("--clip-model-id", default="/root/models/clip-vit-large-patch14-336")
+    parser.add_argument("--clip-model-id", default="openai/clip-vit-large-patch14-336")
     parser.add_argument("--clip-batch-size", type=int, default=8)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output", type=Path, help="Default: predictions' parent / metrics_<region>.json")

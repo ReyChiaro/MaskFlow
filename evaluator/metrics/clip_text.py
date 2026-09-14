@@ -4,7 +4,7 @@ from transformers import CLIPModel, CLIPProcessor
 from evaluator.register import REGISTER_METRIC
 from .mask_utils import RegionalImages, image_device, image_list, mean_metric
 
-CLIP_MODEL_ID = "/root/models/clip-vit-large-patch14-336"
+CLIP_MODEL_ID = "/root/models/intern-xr/clip-vit-large-patch14-336"
 _MODEL_CACHE = {}
 
 
