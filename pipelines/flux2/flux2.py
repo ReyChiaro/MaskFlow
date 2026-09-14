@@ -6,10 +6,10 @@ import torch.nn.functional as F
 from diffusers import AutoencoderKLFlux2, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from PIL import Image
-from torchvision.transforms.functional import to_tensor, to_pil_image
+from torchvision.transforms.functional import to_pil_image, to_tensor
 from tqdm import tqdm
 
-from pipelines.base_pipeline import BasePipeline, PreprocessOutput, ForwardOutput
+from pipelines.base_pipeline import BasePipeline, ForwardOutput, PreprocessOutput
 from schedulers.flux2_flow_matching import Flux2FlowMatchingScheduler
 
 
@@ -45,13 +45,23 @@ class Flux2(BasePipeline):
     def __post_init__(self):
         if self.scheduler is None:
             raise ValueError("A Flux2FlowMatchingScheduler must be provided in the pipeline config.")
-        self.vae = AutoencoderKLFlux2.from_pretrained(
-            self.pretrained_model, subfolder="vae", torch_dtype=self.dtype,
-        ).to(self.device).requires_grad_(False).eval()
+        self.vae = (
+            AutoencoderKLFlux2.from_pretrained(
+                self.pretrained_model,
+                subfolder="vae",
+                torch_dtype=self.dtype,
+            )
+            .to(self.device)
+            .requires_grad_(False)
+            .eval()
+        )
         self.transformer = self.load_transformer()
         # Keep the native pipeline as the text/codec helper without loading a second transformer or VAE.
         self.text_pipeline = Flux2Pipeline.from_pretrained(
-            self.pretrained_model, vae=self.vae, transformer=None, torch_dtype=self.dtype,
+            self.pretrained_model,
+            vae=self.vae,
+            transformer=None,
+            torch_dtype=self.dtype,
         ).to(self.device)
         self.text_pipeline.text_encoder.requires_grad_(False).eval()
         self.image_processor = self.text_pipeline.image_processor
@@ -59,9 +69,15 @@ class Flux2(BasePipeline):
             self.scheduler.native_scheduler = self.text_pipeline.scheduler
 
     def load_transformer(self):
-        return Flux2Transformer2DModel.from_pretrained(
-            self.pretrained_model, subfolder="transformer", torch_dtype=self.dtype,
-        ).to(self.device).requires_grad_(False)
+        return (
+            Flux2Transformer2DModel.from_pretrained(
+                self.pretrained_model,
+                subfolder="transformer",
+                torch_dtype=self.dtype,
+            )
+            .to(self.device)
+            .requires_grad_(False)
+        )
 
     @property
     def vae_scale_factor(self):
@@ -77,7 +93,8 @@ class Flux2(BasePipeline):
         multiple_h = self.vae_scale_factor * self.latent_patch_size[0]
         multiple_w = self.vae_scale_factor * self.latent_patch_size[1]
         return max(multiple_h, int(height * scale) // multiple_h * multiple_h), max(
-            multiple_w, int(width * scale) // multiple_w * multiple_w,
+            multiple_w,
+            int(width * scale) // multiple_w * multiple_w,
         )
 
     def resize_image(self, image, size, is_mask=False):
@@ -106,8 +123,11 @@ class Flux2(BasePipeline):
             if key in conditions:
                 dit_conditions[key] = self.preprocess_condition(conditions[key])
         return PreprocessOutput(
-            prompt=batch["prompt"], negative_prompt=batch.get("negative_prompt"),
-            target=target, height=height, width=width,
+            prompt=batch["prompt"],
+            negative_prompt=batch.get("negative_prompt"),
+            target=target,
+            height=height,
+            width=width,
             dit_conditions=dit_conditions,
         )
 
@@ -125,7 +145,9 @@ class Flux2(BasePipeline):
     @torch.no_grad()
     def encode_prompt(self, prompt):
         return self.text_pipeline.encode_prompt(
-            prompt=prompt, device=self.device, max_sequence_length=self.max_sequence_length,
+            prompt=prompt,
+            device=self.device,
+            max_sequence_length=self.max_sequence_length,
             text_encoder_out_layers=tuple(self.text_encoder_out_layers),
         )
 
@@ -160,10 +182,12 @@ class Flux2(BasePipeline):
         ids = None
         if latents:
             # Native helper accepts one sample's reference images, not a batch of unrelated images.
-            ids = torch.cat([
-                Flux2Pipeline._prepare_image_ids([image[index : index + 1] for image in latents])
-                for index in range(latents[0].shape[0])
-            ]).to(self.device)
+            ids = torch.cat(
+                [
+                    Flux2Pipeline._prepare_image_ids([image[index : index + 1] for image in latents])
+                    for index in range(latents[0].shape[0])
+                ]
+            ).to(self.device)
         return packed, ids
 
     @torch.no_grad()
@@ -171,14 +195,25 @@ class Flux2(BasePipeline):
         prompt_embeds, text_ids = self.encode_prompt(data.prompt)
         height, width = data.target.shape[-2:] if data.target is not None else (data.height, data.width)
         noise, latent_ids = self.text_pipeline.prepare_latents(
-            batch_size=len(data.prompt), num_latents_channels=self.vae.config.latent_channels,
-            height=height, width=width, dtype=self.dtype, device=self.device, generator=self.generator,
+            batch_size=len(data.prompt),
+            num_latents_channels=self.vae.config.latent_channels,
+            height=height,
+            width=width,
+            dtype=self.dtype,
+            device=self.device,
+            generator=self.generator,
         )
         conditions, condition_ids = self.encode_conditions(data)
         image_ids = torch.cat([latent_ids, condition_ids], dim=1) if condition_ids is not None else latent_ids
         result = Flux2ForwardOutput(
-            prompt_embeds=prompt_embeds, text_ids=text_ids, image_ids=image_ids, latent_ids=latent_ids,
-            conditions=conditions, noise=noise, height=height, width=width,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            image_ids=image_ids,
+            latent_ids=latent_ids,
+            conditions=conditions,
+            noise=noise,
+            height=height,
+            width=width,
         )
         if text_cfg_scale > 1:
             negative_prompt = data.negative_prompt or [""] * len(data.prompt)
@@ -204,12 +239,15 @@ class Flux2(BasePipeline):
         if self.transformer.config.guidance_embeds:
             guidance = torch.full((xt.shape[0],), self.guidance_scale, device=xt.device, dtype=torch.float32)
         prediction = self.transformer(
-            hidden_states=hidden_states, timestep=timestep.to(xt).expand(xt.shape[0]), guidance=guidance,
+            hidden_states=hidden_states,
+            timestep=timestep.to(xt).expand(xt.shape[0]),
+            guidance=guidance,
             encoder_hidden_states=inputs.negative_prompt_embeds if negative else inputs.prompt_embeds,
             txt_ids=inputs.negative_text_ids if negative else inputs.text_ids,
-            img_ids=inputs.image_ids, return_dict=False,
+            img_ids=inputs.image_ids,
+            return_dict=False,
         )[0]
-        return prediction[:, :xt.shape[1]].to(xt)
+        return prediction[:, : xt.shape[1]].to(xt)
 
     def compute_loss(self, prediction, inputs):
         return {"loss": F.mse_loss(prediction.float(), inputs.ground_truth.float())}
@@ -226,8 +264,10 @@ class Flux2(BasePipeline):
             negative = self.denoise(xt, timestep, inputs, negative=True)
             combined = negative + text_cfg_scale * (prediction - negative)
             if self.rescale_cfg:
-                combined = combined * (prediction.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-                                       / combined.norm(dim=-1, keepdim=True).clamp_min(1e-6))
+                combined = combined * (
+                    prediction.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+                    / combined.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+                )
             prediction = combined
         return prediction
 
@@ -254,8 +294,15 @@ class Flux2(BasePipeline):
 
     @torch.inference_mode()
     def generate(
-        self, prompt, source_image: Image.Image | None = None, mask_image: Image.Image | None = None,
-        negative_prompt="", height=None, width=None, num_inference_steps=50, text_cfg_scale=1.0,
+        self,
+        prompt,
+        source_image: Image.Image | None = None,
+        mask_image: Image.Image | None = None,
+        negative_prompt="",
+        height=None,
+        width=None,
+        num_inference_steps=50,
+        text_cfg_scale=1.0,
         **cfg_kwargs,
     ):
         conditions = {}
@@ -268,7 +315,9 @@ class Flux2(BasePipeline):
             width = width or source_image.width
             height = height or source_image.height
         batch = {
-            "prompt": [prompt], "negative_prompt": [negative_prompt], "conditions": conditions,
+            "prompt": [prompt],
+            "negative_prompt": [negative_prompt],
+            "conditions": conditions,
             "target": torch.zeros(1, self.vae.config.in_channels, height, width),
         }
         return self.eval_step(batch, num_inference_steps, text_cfg_scale, **cfg_kwargs)

@@ -14,7 +14,6 @@ from trainer.prompt_sampler.prompt_sampler import PromptSampler
 
 @dataclasses.dataclass
 class LoraTrainer(BaseTrainer):
-
     lora_configs: OmegaConf | None = None
     adapter_state_dict_dir: str = "lora_adapter"
 
@@ -55,7 +54,6 @@ class LoraTrainer(BaseTrainer):
 
 @dataclasses.dataclass
 class MaskFlowTrainer(LoraTrainer):
-
     prompt_sampler_cfgs: OmegaConf = None
 
     # CFG

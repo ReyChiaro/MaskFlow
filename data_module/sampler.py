@@ -1,6 +1,7 @@
-from torch.utils.data import Dataset, DistributedSampler
 from collections.abc import Iterator
+
 from loguru import logger
+from torch.utils.data import Dataset, DistributedSampler
 
 
 class CheckpointDistributedSampler(DistributedSampler):

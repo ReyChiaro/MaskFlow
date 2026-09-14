@@ -1,22 +1,21 @@
+from dataclasses import dataclass, field
+from typing import Any, Literal, Optional
+
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
-
-from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
-    QwenImageEditPlusPipeline,
-    CONDITION_IMAGE_SIZE,
-    calculate_dimensions,
-)
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
 from diffusers.models.transformers.transformer_qwenimage import QwenImageTransformer2DModel
-
-from dataclasses import dataclass, field
+from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
+    CONDITION_IMAGE_SIZE,
+    QwenImageEditPlusPipeline,
+    calculate_dimensions,
+)
 from tqdm import tqdm
-from typing import Any, Literal, Optional
 
-from schedulers import RectifiedFlowMatchingScheduler
-from pipelines.base_pipeline import BasePipeline, PreprocessOutput, ForwardOutput
 from data_module.utils import MAX_RESOLUTION
+from pipelines.base_pipeline import BasePipeline, ForwardOutput, PreprocessOutput
+from schedulers import RectifiedFlowMatchingScheduler
 
 
 def resize_rgb(image: torch.Tensor, height: int, width: int) -> torch.Tensor:
@@ -30,13 +29,11 @@ def resize_rgb(image: torch.Tensor, height: int, width: int) -> torch.Tensor:
 
 @dataclass
 class QwenForwardOutput(ForwardOutput):
-
     image_shapes: list = field(default_factory=list)
 
 
 @dataclass
 class QwenImageEditPlus(BasePipeline):
-
     pretrained_model: str | None = None
     scheduler: RectifiedFlowMatchingScheduler | None = None
     generator: torch.Generator | None = None
@@ -135,7 +132,8 @@ class QwenImageEditPlus(BasePipeline):
             vlm_conditions=vlm_conditions,
             dit_conditions=dit_conditions,
             target=target,
-            height=h, width=w,
+            height=h,
+            width=w,
         )
 
     def encode_prompt(
