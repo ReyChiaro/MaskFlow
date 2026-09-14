@@ -414,15 +414,18 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         loss = None
 
         if self.enable_masked_loss and mask_latents is not None:
-            loss_field = self.mask_loss_weight * mask_latents * loss_field
+            mask_field = mask_latents * loss_field
 
             if mask_ratio is not None:
-                loss_field = (1.0 / (mask_ratio + 1e-6)) * loss_field
+                mask_field = (1.0 / (mask_ratio + 1e-6)) * mask_field
                 loss_dict["mask_ratio"] = mask_ratio.mean()
+
+            loss_field = loss_field + self.mask_loss_weight * mask_field
 
         loss = (loss_field.reshape(predictions.shape[0], -1).mean(dim=1)).mean()
         loss_dict["loss"] = loss
         return loss_dict
+
 
     def forward_step(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         # `preprocess_inputs` includes extracting prompts and images from batched samples
