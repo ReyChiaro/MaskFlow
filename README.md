@@ -312,6 +312,41 @@ The JSONL interface remains available via `--data-file` and `--image-root`.
 to the Hugging Face input. Use distinct `--output` paths for different subsets or
 regions to keep all reports.
 
+## Extract prompts from Parquet
+
+Export a selected MaskEdit-10k text field to UTF-8 JSONL:
+
+```bash
+python extract_parquet_prompts.py \
+  --parquet-dir dataset/MaskEdit-10k/data \
+  --key prompt --output extracted/prompts.jsonl
+```
+
+Supported keys are `prompt` (default), `edit_instruction`, and `negative_prompt`,
+as defined in the dataset's
+[prepare_dataset.py](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k/blob/main/prepare_dataset.py).
+All Parquet files below the input folder are searched recursively. Use
+`--pattern 'test-*.parquet'` to export only test shards, or point `--parquet-dir`
+at `data/scene` for one subset. Text is read in batches of 1024 rows; change this
+with `--batch-size`. Image bytes are not loaded.
+
+Each output line contains the selected text field, available `id`, `source_id`,
+and `target` filename metadata, plus the relative `parquet_file` and one-based
+`row_number`. Shards are sorted by path and rows preserve their original order.
+Duplicate text and empty strings are retained; embedded newlines are JSON-escaped
+and restored when read with `json.loads`. Missing or null text raises an error.
+Existing output files are never overwritten, and failed runs leave no partial
+JSONL output. The CLI prints the number of exported rows and processed shards.
+
+```python
+from extract_parquet_prompts import extract_parquet_prompts
+
+counts = extract_parquet_prompts(
+    "dataset/MaskEdit-10k/data", "extracted/instructions.jsonl",
+    key="edit_instruction", pattern="test-*.parquet",
+)
+```
+
 ## Distribution Matching Distillation
 
 To improve efficiency for practical deployment, we apply Distribution Matching Distillation (DMD) and provide accelerated 8-step and 16-step variants. The distilled LoRA represents a residual on top of the corresponding standard MaskFlow checkpoint, so both the matching SFT and DMD weights are required during inference. Although the student is distilled with teacher text classifier-free guidance, enabling CFG during student inference generally gives better performance.
@@ -527,4 +562,26 @@ MaskFlow code and adapter weights are released under the [MIT License](LICENSE).
   primaryClass={cs.CV},
   url={https://arxiv.org/abs/2608.06929},
 }
+```
+
+
+### Reproducible single-image and batch inference
+
+`MaskEditDataset`, `HFMaskEditDataset`, and `inference.py` use the same source-based crop and PIL resize: Lanczos for RGB, NEAREST for masks. Dataset `max_resolution` is a pixel area limit (default `1048576`); both dimensions are multiples of `divisible_by` (default `32`). Single-image settings live under `preprocessing`; use the same values as the evaluation dataset. The pipeline's `eval_step` accepts already aligned CPU float32 images `[B, C, H, W]` in `[0, 1]`.
+
+Pass `seed` to `eval_step`: an integer restarts that seed independently for every image; a list supplies one seed per batch item. Identical seed, latent shape, device type and dtype produce identical initial noise regardless of batching, rank or earlier evaluations. This does not fix training noise or timesteps. Matching initial noise alone does not guarantee bitwise identical GPU outputs across batch sizes or different hardware.
+
+- Single image: `runtime.seed=42 checkpoint.lora_scale=1.0` (`lora_scale` scales the loaded SFT adapter).
+- Batch evaluation: `eval_seed=42 adapters.sft.lora_scale=1.0`.
+- Evaluation during training: `trainer.eval_seed=42`.
+
+For comparisons, also match source/mask pixels, prompt, checkpoint, CFG, pixel blend, Poisson and scheduler settings. Inference outputs, evaluation masks, and training evaluation grids are saved as PNG. Earlier batch outputs used a continuously advancing generator and cannot be reproduced by the new per-image seed rule alone.
+
+```bash
+python inference.py \
+  input.source=/path/to/source.png input.mask=/path/to/mask.png \
+  'input.prompt="Replace the object in the masked area in the image 2 with a zebra."' \
+  checkpoint.sft_path=/path/to/pytorch_lora_weights.safetensors \
+  checkpoint.sft_weight_name=null checkpoint.lora_scale=1.0 \
+  runtime.seed=42 pipeline.enable_pixel_blend=false output.path=result.png
 ```

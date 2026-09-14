@@ -22,7 +22,7 @@ from pipelines.base_pipeline import BasePipeline
 from trainer.lora_utils import merge_lora
 
 
-def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig | None):
+def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig | None) -> None:
     if adapter_cfgs is None:
         return
     for adapter_type, path_and_cfg in adapter_cfgs.items():
@@ -33,7 +33,7 @@ def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig | None):
         if not path:
             raise ValueError(f"adapters.{adapter_type}.path must point to a trained LoRA checkpoint.")
         logger.info(f"Load adapter {adapter_type} from {path}.")
-        merge_lora(pipe.transformer, path, cfg.adapter_name, lora_scale=1.0)
+        merge_lora(pipe.transformer, path, cfg.adapter_name, lora_scale=path_and_cfg.lora_scale)
     logger.info("All adapters have been loaded into the model.")
 
 
@@ -74,9 +74,6 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
     elif cfgs.weight_dtype == "fp16":
         weight_dtype = torch.float16
 
-    # Use the same seed across different device for one evaluation
-    generator = torch.Generator(device).manual_seed(base_seed)
-
     random.seed(base_seed)
     np.random.seed(base_seed)
     torch.manual_seed(base_seed)
@@ -116,7 +113,7 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
         return
 
     # -------- Pipeline and LoRA loading -------- #
-    pipe: BasePipeline = instantiate(cfgs.pipeline, device=device, generator=generator, dtype=weight_dtype)
+    pipe: BasePipeline = instantiate(cfgs.pipeline, device=device, dtype=weight_dtype)
     load_lora_adapters(pipe, cfgs.adapters)
     pipe.transformer.requires_grad_(False).eval()
     pipe.vae.eval()
@@ -139,6 +136,7 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
             batch,
             num_inference_steps=num_inference_steps,
             text_cfg_scale=text_cfg_scale,
+            seed=cfgs.eval_seed,
             **cfg_kwargs,
         )
         for i, image_name in enumerate(batch["image_name"]):
@@ -146,9 +144,9 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
             mask_path = mask_dir / f"{image_name}.png"
             pred_path.parent.mkdir(parents=True, exist_ok=True)
             mask_path.parent.mkdir(parents=True, exist_ok=True)
-            save_image(output["output"][i], pred_path)
+            save_image(output["output"][i].float().cpu(), pred_path)
             if "mask" in output:
-                save_image(output["mask"][i], mask_path)
+                save_image(output["mask"][i].float().cpu(), mask_path)
         logger.info(f"Rank {rank}: Eval [{step + 1}/{len(eval_loader)}] saved.")
     logger.info(f"Rank {rank}: evaluation finished, saved to {evaluate_dir}.")
 

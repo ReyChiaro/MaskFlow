@@ -24,6 +24,7 @@ from data_module.utils import (
     center_crop_to_aspect_ratio,
     crop_image_to_aspect_ratio,
     reshape_to_divisible_max_resolution,
+    resize_image,
 )
 from evaluator.register import get_metrics, initialize_metrics
 
@@ -139,12 +140,12 @@ class ImageFiles(Sequence):
             width, height = self.sizes[index]
             if self.crop:
                 tensor = center_crop_to_aspect_ratio(tensor, width / height)
-            tensor = TF.resize(
+            tensor = resize_image(
                 tensor,
-                [height, width],
-                interpolation=TF.InterpolationMode.NEAREST if self.is_mask else TF.InterpolationMode.BICUBIC,
-                antialias=not self.is_mask,
-            ).clamp(0, 1)
+                height,
+                width,
+                Image.Resampling.NEAREST if self.is_mask else Image.Resampling.LANCZOS,
+            )
         return tensor.to(self.device)
 
 
@@ -297,9 +298,7 @@ class EvaluationData:
             value = (
                 self.keys[index]
                 if role == "prediction"
-                else row.get("target")
-                if role == "target"
-                else conditions.get(role)
+                else row.get("target") if role == "target" else conditions.get(role)
             )
             # Prediction keys have no suffix. Add a synthetic suffix so dotted IDs survive resolution.
             if role == "prediction" and value:

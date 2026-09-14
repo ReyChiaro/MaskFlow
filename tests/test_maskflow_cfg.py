@@ -70,7 +70,8 @@ def flux_fixture():
         return torch.ones(1, 2, 2) * bool(prompt[0]), torch.zeros(1, 2, 4)
 
     def prepare_latents(**kwargs):
-        noise = torch.randn(1, 4, 4, generator=kwargs['generator'])
+        from diffusers.utils.torch_utils import randn_tensor
+        noise = randn_tensor((1, 4, 4), generator=kwargs['generator'], device=torch.device('cpu'))
         ids = Flux2Pipeline._prepare_image_ids([torch.zeros(1, 4, 2, 2)])
         ids[..., 0] = 0
         return noise, ids
@@ -294,8 +295,9 @@ class PipelineTests(unittest.TestCase):
             output_path = str(Path(directory) / 'output.png')
             Image.new('RGB', (4, 4), 'white').save(image_path)
             cfg = OmegaConf.create({
-                'input': {'source': image_path, 'mask': image_path, 'prompt': 'edit'},
-                'runtime': {'device': 'cpu', 'dtype': 'float32', 'num_inference_steps': 2,
+                'input': {'source': image_path, 'mask': image_path, 'prompt': 'edit', 'negative_prompt': ''},
+                'preprocessing': {'max_resolution': 1024, 'divisible_by': 32},
+                'runtime': {'device': 'cpu', 'dtype': 'float32', 'seed': 17, 'num_inference_steps': 2,
                             'text_cfg_scale': 2., 'mask_cfg_scale': 3., 'interaction_cfg_scale': 5.},
                 'output': {'path': output_path},
             })
@@ -305,6 +307,7 @@ class PipelineTests(unittest.TestCase):
                 inference.main.__wrapped__(cfg)
             args, kwargs = pipe.eval_step.call_args
             self.assertEqual(args[0]['prompt'], ['edit'])
+            self.assertEqual(kwargs['seed'], 17)
             self.assertEqual(kwargs['mask_cfg_scale'], 3.)
             self.assertEqual(kwargs['interaction_cfg_scale'], 5.)
             self.assertTrue(Path(output_path).is_file())

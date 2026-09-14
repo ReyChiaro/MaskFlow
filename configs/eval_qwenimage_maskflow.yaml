@@ -11,11 +11,13 @@ adapters:
   sft:
     path: null  # The trained weight path
     cfg: ${sft_adapter}
+    lora_scale: 1.0
   # distill:
   #   path: null
   #   cfg: ${distill_adapter}
 
 base_seed: 42
+eval_seed: 42  # Each image starts from this seed.
 weight_dtype: bf16
 
 # Use 1 for variable-size images: default collation stacks tensors within each batch.

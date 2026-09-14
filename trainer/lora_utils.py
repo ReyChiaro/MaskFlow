@@ -4,7 +4,7 @@ import torch
 from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
 from diffusers.loaders.peft import PeftAdapterMixin
 from loguru import logger
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
@@ -47,9 +47,10 @@ def merge_lora(
     lora_path: str,
     adapter_name: str,
     lora_scale: float = 1.0,
-):
+    weight_name: str | None = None,
+) -> None:
     """Merge lora weights into the model."""
-    load_kwargs = {"adapter_name": adapter_name, "prefix": None}
+    load_kwargs = {"adapter_name": adapter_name, "prefix": None, "weight_name": weight_name}
     transformer.load_lora_adapter(lora_path, **load_kwargs)
     transformer.set_adapter(adapter_name)
     transformer.fuse_lora(
@@ -58,10 +59,14 @@ def merge_lora(
         adapter_names=[adapter_name],
     )
     transformer.unload_lora()
-    logger.info(f"Merged LoRA '{lora_path}' into transformer.")
+    logger.info(f"Merged LoRA '{lora_path}' into transformer with scale {lora_scale}.")
 
 
-def load_inference_loras(transformer: torch.nn.Module, checkpoint_cfgs: OmegaConf):
+def load_inference_loras(
+    transformer: PeftAdapterMixin,
+    checkpoint_cfgs: DictConfig,
+    lora_scale: float = 1.0,
+) -> None:
     """Apply the SFT LoRA and, when requested, activate its DMD residual LoRA."""
     sft_path = checkpoint_cfgs.get("sft_path")
     dmd_path = checkpoint_cfgs.get("dmd_path")
@@ -73,7 +78,9 @@ def load_inference_loras(transformer: torch.nn.Module, checkpoint_cfgs: OmegaCon
         merge_lora(
             transformer,
             sft_path,
-            checkpoint_cfgs.get("sft_adapter_name", "maskflow"),
+            checkpoint_cfgs.sft_adapter_name,
+            lora_scale=lora_scale,
+            weight_name=checkpoint_cfgs.sft_weight_name,
         )
 
     if dmd_path:

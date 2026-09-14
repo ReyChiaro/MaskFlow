@@ -3,28 +3,22 @@ from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as T
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
 from diffusers.models.transformers.transformer_qwenimage import QwenImageTransformer2DModel
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
-    CONDITION_IMAGE_SIZE,
     QwenImageEditPlusPipeline,
-    calculate_dimensions,
 )
 from tqdm import tqdm
 
-from data_module.utils import MAX_RESOLUTION
+from data_module.utils import image_dimensions, resize_image
+from diffusers.utils.torch_utils import randn_tensor
 from pipelines.base_pipeline import BasePipeline, ForwardOutput, PreprocessOutput
 from schedulers import RectifiedFlowMatchingScheduler
 
 
 def resize_rgb(image: torch.Tensor, height: int, width: int) -> torch.Tensor:
-    """Resize RGB tensors with antialiased Lanczos interpolation."""
-    if image.shape[-2:] == (height, width):
-        return image
-    dtype = image.dtype
-    image = T.Resize((height, width), T.InterpolationMode.BICUBIC, antialias=True)(image.float())
-    return image.clamp(0, 1).to(dtype=dtype)
+    """Resize CPU float32 RGB [B, C, H, W] in [0, 1] using PIL Lanczos."""
+    return torch.stack([resize_image(item, height, width) for item in image])
 
 
 @dataclass
@@ -39,6 +33,8 @@ class QwenImageEditPlus(BasePipeline):
     generator: torch.Generator | None = None
     device: torch.device | None = None
     dtype: torch.dtype | None = None
+    max_condition_resolution: int = 384 * 384
+    divisible_by: int = 32
 
     vae: AutoencoderKLQwenImage = field(init=False, default=None)
     transformer: QwenImageTransformer2DModel = field(init=False, default=None)
@@ -87,44 +83,22 @@ class QwenImageEditPlus(BasePipeline):
         """
         prompt: list[str] = batch["prompt"]
         target = batch.get("target")
+        negative_prompt: list[str] | None = batch.get("negative_prompt")
+        conditions: dict[str, torch.Tensor] = batch["conditions"]
+        # Dataset and single-image entry point supply aligned CPU float32 [B, C, H, W] images.
+        h, w = conditions["source"].shape[-2:]
         if target is not None:
-            target = target.to(self.device, dtype=self.dtype)
-
-        negative_prompt: Optional[list[str]] = batch.get("negative_prompt", None)
-        conditions: Optional[dict[str, torch.Tensor]] = batch.get("conditions", None)
-
-        if conditions is not None:
-            if isinstance(conditions, dict):
-                conditions: dict[str, torch.Tensor] = {
-                    k: c.to(self.device, dtype=self.dtype) for k, c in conditions.items()
-                }
-            else:
-                conditions = [c.to(self.device, dtype=self.dtype) for k, c in conditions]
-
-        # ---------------- Preprocess ---------------- #
-        # To tensor and reshape to target areas
-        reference = target if target is not None else (conditions or {}).get("source")
-        if reference is None:
-            raise ValueError("Evaluation requires a target or conditions.source for output dimensions.")
-        h, w = reference.shape[-2:]
-        aspect = w / h
-        w, h = calculate_dimensions(MAX_RESOLUTION, aspect)
-        if target is not None:
-            target = resize_rgb(target, h, w)
-        if target is not None:
-            target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
+            target = self.image_processor.preprocess(target.to(self.device, dtype=self.dtype), h, w).unsqueeze(2)
 
         vlm_conditions = {}
         dit_conditions = {}
-        if conditions is not None:
-            for k, c in conditions.items():
-                ch, cw = c.shape[-2:]
-                aspect = cw / ch
-                cw, ch = calculate_dimensions(CONDITION_IMAGE_SIZE, aspect)
-                vw, vh = calculate_dimensions(MAX_RESOLUTION, aspect)
-                vlm_conditions[k] = resize_rgb(c, ch, cw)
-                c = resize_rgb(c, vh, vw)
-                dit_conditions[k] = self.image_processor.preprocess(c, vh, vw).unsqueeze(2)
+        for key, image in conditions.items():
+            ih, iw = image.shape[-2:]
+            ch, cw = image_dimensions(iw / ih, self.max_condition_resolution, self.divisible_by)
+            vlm_conditions[key] = resize_rgb(image, ch, cw).to(self.device, dtype=self.dtype)
+            dit_conditions[key] = self.image_processor.preprocess(
+                image.to(self.device, dtype=self.dtype), ih, iw
+            ).unsqueeze(2)
 
         return PreprocessOutput(
             prompt=prompt,
@@ -243,10 +217,17 @@ class QwenImageEditPlus(BasePipeline):
             image_shapes=image_shapes,
         )
 
+    def sample_eval_noise(self, shape: tuple[int, ...], seed: int | list[int] = 42) -> torch.Tensor:
+        """Return [B, C, 1, H, W] latent noise; each item starts from its own seed, independent of batch order."""
+        seeds = [seed] * shape[0] if isinstance(seed, int) else seed
+        generators = [torch.Generator(self.device).manual_seed(value) for value in seeds]
+        return randn_tensor(shape, generator=generators, device=self.device, dtype=self.dtype)
+
     def prepare_eval_inputs(
         self,
         preprocessed_data: PreprocessOutput,
         text_cfg_scale: float = 1.0,
+        seed: int | list[int] = 42,
     ) -> QwenForwardOutput:
         r"""
         Prepare training evaluation inputs.
@@ -279,7 +260,7 @@ class QwenImageEditPlus(BasePipeline):
             height // self.vae_scale_factor,
             width // self.vae_scale_factor,
         )
-        noise = torch.randn(noise_shape, generator=self.generator, device=self.device, dtype=self.dtype)
+        noise = self.sample_eval_noise(noise_shape, seed)
         conds = [self.encode_image(c, sample_mode) for c in dit_conditions.values()]
         image_shapes.append((1, noise_shape[-2] // self.pacth_size, noise_shape[-1] // self.pacth_size))
         image_shapes.extend([(1, c.shape[-2] // self.pacth_size, c.shape[-1] // self.pacth_size) for c in conds])
@@ -376,15 +357,16 @@ class QwenImageEditPlus(BasePipeline):
     @torch.inference_mode()
     def eval_step(
         self,
-        batch,
+        batch: dict[str, Any],
         num_inference_steps: int = 50,
         text_cfg_scale: float = 1.0,
-    ) -> list[torch.Tensor]:
+        seed: int | list[int] = 42,
+    ) -> dict[str, torch.Tensor]:
         r"""
         Mainly used for evaluate batched data with given target images.
         """
         preprocessed_data = self.preprocess_inputs(batch)
-        model_inputs = self.prepare_eval_inputs(preprocessed_data, text_cfg_scale)
+        model_inputs = self.prepare_eval_inputs(preprocessed_data, text_cfg_scale, seed)
 
         xt = model_inputs.noise
         # with self.scheduler.inference_sampler(xt, num_inference_steps, xt.shape[1]) as sampler:

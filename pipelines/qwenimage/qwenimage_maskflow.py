@@ -7,15 +7,13 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as T
 from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
-    CONDITION_IMAGE_SIZE,
     QwenImageEditPlusPipeline,
-    calculate_dimensions,
 )
 from loguru import logger
 from PIL import Image
 from tqdm import tqdm
 
-from data_module.utils import MAX_RESOLUTION
+from data_module.utils import image_dimensions, preprocess_images
 from pipelines import maskflow_utils
 from pipelines.base_pipeline import PreprocessOutput
 from pipelines.cfg import (
@@ -138,39 +136,24 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             )
             return super().preprocess_inputs(batch)
 
-        source: torch.Tensor = conditions["source"].to(self.device, dtype=self.dtype)
-        mask: torch.Tensor = conditions["mask"].to(self.device, dtype=self.dtype)
+        # Spatial preprocessing has already produced aligned CPU float32 [B, C, H, W] tensors in [0, 1].
+        source = conditions["source"]
+        mask = conditions["mask"].to(self.device, dtype=self.dtype)
+        h, w = source.shape[-2:]
+        ch, cw = image_dimensions(w / h, self.max_condition_resolution, self.divisible_by)
+        vlm_source = resize_rgb(source, ch, cw).to(self.device, dtype=self.dtype)
+        source = source.to(self.device, dtype=self.dtype)
 
-        # Resize all spatial inputs first.
-        # masks use nearest-neighbor so their boundaries stay discrete.
-        h, w = (target if target is not None else source).shape[-2:]
-        aspect = w / h
-        w, h = calculate_dimensions(MAX_RESOLUTION, aspect)
-        if target is not None:
-            target = resize_rgb(target, h, w)
-        source = resize_rgb(source, h, w)
-        mask = F.interpolate(mask, size=(h, w), mode="nearest")
-
-        # Apply morphology at model resolution so kernel sizes do not depend on
-        # the uploaded image resolution.
+        # Morphology is applied once at the shared model resolution.
         if self.mask_dilation_kernel > 0:
             mask = maskflow_utils.dilate_mask(mask, self.mask_dilation_kernel)
         if self.mask_blur_kernel > 0:
             mask = maskflow_utils.blur_mask(mask, self.mask_blur_kernel, self.mask_blur_sigma)
-
         if target is not None:
             target = self.image_processor.preprocess(target, h, w).unsqueeze(2)
-
-        cw, ch = calculate_dimensions(CONDITION_IMAGE_SIZE, aspect)
         vlm_conditions = {
-            "source": resize_rgb(source, ch, cw),
-            "mask": F.interpolate(
-                mask.float(),
-                size=(ch, cw),
-                mode="bilinear",
-                align_corners=False,
-                antialias=True,
-            ).to(dtype=mask.dtype),
+            "source": vlm_source,
+            "mask": F.interpolate(mask.float(), size=(ch, cw), mode="nearest").to(dtype=mask.dtype),
         }
         dit_conditions = {
             "source": self.image_processor.preprocess(source, h, w).unsqueeze(2),
@@ -321,6 +304,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         text_cfg_scale: float = 1.0,
         mask_cfg_scale: float = 1.0,
         interaction_cfg_scale: float | None = None,
+        seed: int | list[int] = 42,
     ) -> QwenMaskFlowForwardOutput:
         r"""
         Prepare training evaluation inputs.
@@ -332,7 +316,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             logger.warning(
                 "QwenImageMaskFlow is used, but no mask and source found in dataset. Fall back to QwenImageEditPlus."
             )
-            return super().prepare_eval_inputs(preprocessed_data, text_cfg_scale)
+            return super().prepare_eval_inputs(preprocessed_data, text_cfg_scale, seed)
 
         prompt = preprocessed_data.prompt
 
@@ -350,7 +334,7 @@ class QwenImageMaskFlow(QwenImageEditPlus):
             height // self.vae_scale_factor,
             width // self.vae_scale_factor,
         )
-        noise = torch.randn(noise_shape, generator=self.generator, device=self.device, dtype=self.dtype)
+        noise = self.sample_eval_noise(noise_shape, seed)
         conds = [
             self.encode_image(dit_conditions["source"], sample_mode),
             self.encode_image(dit_conditions["mask"], sample_mode),
@@ -518,11 +502,12 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     @torch.inference_mode()
     def eval_step(
         self,
-        batch,
+        batch: dict[str, Any],
         num_inference_steps: int = 50,
         text_cfg_scale: float = 1.0,
         mask_cfg_scale: float = 1.0,
         interaction_cfg_scale: float | None = None,
+        seed: int | list[int] = 42,
     ) -> dict[str, torch.Tensor]:
         r"""
         Evaluation step is used for batched sample evaluation, especially on benchmarks or testsets.
@@ -532,9 +517,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         if getattr(preprocessed_data, "mask", None) is None:
             if mask_cfg_scale != 1.0 or interaction_cfg_scale is not None:
                 raise ValueError("Mask CFG requires source and mask inputs.")
-            return super().eval_step(batch, num_inference_steps, text_cfg_scale)
+            return super().eval_step(batch, num_inference_steps, text_cfg_scale, seed)
         model_inputs = self.prepare_eval_inputs(
-            preprocessed_data, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale
+            preprocessed_data, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, seed
         )
         xt = model_inputs.noise
         mask = preprocessed_data.mask
@@ -592,12 +577,28 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     @torch.inference_mode()
     def generate(
         self,
-        prompt: str = None,
-        negative_prompt: str = None,
+        prompt: str | None = None,
+        negative_prompt: str | None = None,
         source_image: Image.Image | None = None,
         mask_image: Image.Image | None = None,
-        height: int | None = None,
-        width: int | None = None,
+        max_resolution: int = 1024 * 1024,
+        divisible_by: int = 32,
+        aspect_ratios: tuple[str, ...] = (
+            "1:1",
+            "1:4",
+            "1:8",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:1",
+            "4:3",
+            "4:5",
+            "5:4",
+            "8:1",
+            "9:16",
+            "16:9",
+            "21:9",
+        ),
         num_inference_steps: int = 50,
         text_cfg_scale: float = 4.0,
         mask_dilation_kernel: int = 25,
@@ -610,21 +611,22 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         poisson_momentum: float = 0.1,
         mask_cfg_scale: float = 1.0,
         interaction_cfg_scale: float | None = None,
+        seed: int | list[int] = 42,
     ) -> dict[str, torch.Tensor]:
         if prompt is None or source_image is None or mask_image is None:
             raise ValueError("MaskFlow generation requires prompt, source_image and mask_image.")
         source_image = source_image.convert("RGB")
         mask_image = mask_image.convert("RGB")
-        size = (width or source_image.width, height or source_image.height)
-        source_image = source_image.resize(size, Image.Resampling.LANCZOS)
-        mask_image = mask_image.resize(size, Image.Resampling.NEAREST)
+        conditions, _ = preprocess_images(
+            {"source": T.to_tensor(source_image), "mask": T.to_tensor(mask_image)},
+            max_resolution=max_resolution,
+            divisible_by=divisible_by,
+            aspect_ratios=aspect_ratios,
+        )
         batch = {
             "prompt": [prompt],
             "negative_prompt": [negative_prompt or ""],
-            "conditions": {
-                "source": T.to_tensor(source_image).unsqueeze(0),
-                "mask": T.to_tensor(mask_image).unsqueeze(0),
-            },
+            "conditions": {key: image.unsqueeze(0) for key, image in conditions.items()},
         }
         options = dict(
             mask_dilation_kernel=mask_dilation_kernel,
@@ -640,7 +642,9 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         try:
             for key, value in options.items():
                 setattr(self, key, value)
-            return self.eval_step(batch, num_inference_steps, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale)
+            return self.eval_step(
+                batch, num_inference_steps, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, seed
+            )
         finally:
             for key, value in previous.items():
                 setattr(self, key, value)

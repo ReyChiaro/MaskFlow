@@ -191,9 +191,18 @@ class Flux2(BasePipeline):
         return packed, ids
 
     @torch.no_grad()
-    def prepare_eval_inputs(self, data, text_cfg_scale=1.0):
+    def prepare_eval_inputs(
+        self,
+        data: PreprocessOutput,
+        text_cfg_scale: float = 1.0,
+        seed: int | list[int] | None = None,
+    ) -> Flux2ForwardOutput:
         prompt_embeds, text_ids = self.encode_prompt(data.prompt)
         height, width = data.target.shape[-2:] if data.target is not None else (data.height, data.width)
+        generators = self.generator
+        if seed is not None:
+            seeds = [seed] * len(data.prompt) if isinstance(seed, int) else seed
+            generators = [torch.Generator(self.device).manual_seed(value) for value in seeds]
         noise, latent_ids = self.text_pipeline.prepare_latents(
             batch_size=len(data.prompt),
             num_latents_channels=self.vae.config.latent_channels,
@@ -201,7 +210,7 @@ class Flux2(BasePipeline):
             width=width,
             dtype=self.dtype,
             device=self.device,
-            generator=self.generator,
+            generator=generators,
         )
         conditions, condition_ids = self.encode_conditions(data)
         image_ids = torch.cat([latent_ids, condition_ids], dim=1) if condition_ids is not None else latent_ids
@@ -278,9 +287,16 @@ class Flux2(BasePipeline):
         return {"output": output}
 
     @torch.inference_mode()
-    def eval_step(self, batch, num_inference_steps=50, text_cfg_scale=1.0, **cfg_kwargs):
+    def eval_step(
+        self,
+        batch: dict,
+        num_inference_steps: int = 50,
+        text_cfg_scale: float = 1.0,
+        seed: int | list[int] = 42,
+        **cfg_kwargs,
+    ) -> dict[str, torch.Tensor]:
         data = self.preprocess_inputs(batch)
-        inputs = self.prepare_eval_inputs(data, text_cfg_scale, **cfg_kwargs)
+        inputs = self.prepare_eval_inputs(data, text_cfg_scale, seed=seed, **cfg_kwargs)
         xt = inputs.noised_target if inputs.noised_target is not None else inputs.noise
         with self.scheduler.inference(num_inference_steps, xt.shape[1]) as inferencer:
             for timestep, sigma, next_sigma, derivative in tqdm(inferencer, total=num_inference_steps):

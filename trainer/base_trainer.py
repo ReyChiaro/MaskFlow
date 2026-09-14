@@ -83,6 +83,7 @@ class BaseTrainer:
     data_loader_workers: int = 8
 
     # Inference
+    eval_seed: int = 42
     num_inference_steps: int = 50
     text_cfg_scale: float = 1.0
 
@@ -492,7 +493,7 @@ class BaseTrainer:
             ]
             tensors = torch.cat(tensors, dim=-1)
 
-            save_image(tensors, save_dir / f"{save_name}.jpg")
+            save_image(tensors.float().cpu(), save_dir / f"{save_name}.png")
             metadata_file.write(
                 json.dumps(
                     {
@@ -633,6 +634,7 @@ class BaseTrainer:
                     batch,
                     self.num_inference_steps,
                     text_cfg_scale=self.text_cfg_scale,
+                    seed=self.eval_seed,
                 )
                 self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 

@@ -35,7 +35,7 @@ class EvaluationTests(unittest.TestCase):
                 dataset = ToyDataset(size)
                 seen = []
                 cfg = OmegaConf.create({
-                    "base_seed": 42, "weight_dtype": "fp32", "batch_size_per_process": 2,
+                    "base_seed": 42, "eval_seed": 123, "weight_dtype": "fp32", "batch_size_per_process": 2,
                     "num_workers": 0, "evalset": {}, "pipeline": {}, "adapters": {},
                     "text_cfg_scale": 4.0, "num_inference_steps": 2,
                     "eval_with_position_prompt": True,
@@ -46,6 +46,7 @@ class EvaluationTests(unittest.TestCase):
                 )
 
                 def eval_step(batch, **kwargs):
+                    self.assertEqual(kwargs["seed"], 123)
                     self.assertTrue(torch.is_inference_mode_enabled())
                     self.assertFalse(pipe.transformer.training)
                     self.assertEqual(batch["prompt"], batch["edit_instruction"])
@@ -63,18 +64,18 @@ class EvaluationTests(unittest.TestCase):
                     sizes.append(len(seen) - before)
                 self.assertEqual(Counter(seen), Counter(f"sample_{i}" for i in range(size)))
                 self.assertLessEqual(max(sizes) - min(sizes), 1)
-                self.assertEqual(len(list((Path(tmp) / "predictions").glob("*.jpg"))), size)
+                self.assertEqual(len(list((Path(tmp) / "predictions").glob("*.png"))), size)
                 self.assertEqual(len(list((Path(tmp) / "mask").glob("*.png"))), size)
 
     def test_lora_config_interpolation_and_missing_path(self):
         cfg = OmegaConf.create({
             "sft_adapter": {"adapter_name": "maskflow"},
-            "adapters": {"sft": {"path": "weights.safetensors", "cfg": "${sft_adapter}"}},
+            "adapters": {"sft": {"path": "weights.safetensors", "cfg": "${sft_adapter}", "lora_scale": 0.25}},
         })
         pipe = SimpleNamespace(transformer=Mock())
         with patch.object(evaluate, "merge_lora") as merge:
             evaluate.load_lora_adapters(pipe, cfg.adapters)
-            merge.assert_called_once_with(pipe.transformer, "weights.safetensors", "maskflow", lora_scale=1.0)
+            merge.assert_called_once_with(pipe.transformer, "weights.safetensors", "maskflow", lora_scale=0.25)
             cfg.adapters.sft.path = None
             with self.assertRaisesRegex(ValueError, "adapters.sft.path"):
                 evaluate.load_lora_adapters(pipe, cfg.adapters)
