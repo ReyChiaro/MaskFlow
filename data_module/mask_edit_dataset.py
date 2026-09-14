@@ -102,7 +102,7 @@ class HFMaskEditDataset(MaskEditDataset):
 
     Subsets are concatenated in the supplied order, with shards sorted by name.
     load_start/load_end slice the combined samples using MaskEditDataset semantics.
-    Only filenames and row locations are indexed eagerly; each worker caches one
+    Only metadata and row locations are indexed eagerly; each worker caches one
     row group of embedded images at a time.
     """
 
@@ -156,18 +156,23 @@ class HFMaskEditDataset(MaskEditDataset):
                     missing = set(self.COLUMNS) - set(parquet.schema_arrow.names)
                     if missing:
                         raise ValueError(f"Missing columns in {path}: {sorted(missing)}.")
-                    # Read filenames without loading the target.bytes column.
-                    targets = parquet.read(columns=["target.path"]).column("target").to_pylist()
+                    # Keep text and filenames available without loading image bytes.
+                    columns = [f"{role}.path" for role in ("source", "mask", "target")]
+                    columns += [name for name in parquet.schema_arrow.names if name not in ("source", "mask", "target")]
+                    records = parquet.read(columns=columns).to_pylist()
                     offset = 0
                     for group in range(parquet.num_row_groups):
                         count = parquet.metadata.row_group(group).num_rows
                         for row in range(count):
-                            samples.append({
-                                "target": targets[offset + row]["path"],
+                            sample = records[offset + row]
+                            sample["conditions"] = {role: sample.pop(role)["path"] for role in ("source", "mask")}
+                            sample["target"] = sample["target"]["path"]
+                            sample.update({
                                 "parquet_file": path,
                                 "row_group": group,
                                 "row_index": row,
                             })
+                            samples.append(sample)
                         offset += count
 
         num_total = len(samples)
@@ -185,12 +190,8 @@ class HFMaskEditDataset(MaskEditDataset):
         entry = self.samples[index % self.num_samples]
         key = (entry["parquet_file"], entry["row_group"])
         try:
-            if key != self._cached_key:
-                with pq.ParquetFile(key[0]) as parquet:
-                    table = parquet.read_row_group(key[1], columns=list(self.COLUMNS))
-                self._cached_table = table
-                self._cached_key = key
-            sample = self._cached_table.slice(entry["row_index"], 1).to_pylist()[0]
+            table = self._read_row_group(entry)
+            sample = table.slice(entry["row_index"], 1).to_pylist()[0]
             target = self._load_image_tensor(BytesIO(sample["target"]["bytes"]))
             conditions = {k: self._load_image_tensor(BytesIO(sample[k]["bytes"])) for k in ("source", "mask")}
         except (OSError, ValueError, TypeError, KeyError) as error:
@@ -198,3 +199,26 @@ class HFMaskEditDataset(MaskEditDataset):
                 f"Failed to load {key[0]}, row group {key[1]}, row {entry['row_index']}: {error}"
             ) from error
         return self._preprocess_sample(sample, target, conditions, image_name(entry))
+
+    def _read_row_group(self, entry):
+        key = (entry["parquet_file"], entry["row_group"])
+        if key != self._cached_key:
+            with pq.ParquetFile(key[0]) as parquet:
+                table = parquet.read_row_group(key[1], columns=list(self.COLUMNS))
+            self._cached_table = table
+            self._cached_key = key
+        return self._cached_table
+
+    def load_image_bytes(self, index: int, role: str) -> bytes:
+        """Read an original image for consumers that apply their own preprocessing."""
+        if role not in ("source", "mask", "target"):
+            raise ValueError(f"Unknown image role: {role!r}.")
+        entry = self.samples[index % self.num_samples]
+        try:
+            table = self._read_row_group(entry)
+            return table.column(role)[entry["row_index"]].as_py()["bytes"]
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise ValueError(
+                f"Failed to read {role} from {entry['parquet_file']}, "
+                f"row group {entry['row_group']}, row {entry['row_index']}: {error}"
+            ) from error
