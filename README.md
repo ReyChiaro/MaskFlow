@@ -305,7 +305,22 @@ For text alignment, include `CLIP-TEXT` in `--metrics`, select the text field wi
 checkpoint directory. Text fields are used as stored in the dataset. DISTS and
 LPIPS also need their pretrained weights available. Check `skipped_metrics` and
 `failed_metrics` in the JSON report in addition to the successful scores. Regional
-metrics retain the existing convention of zeroing pixels outside the region.
+`-FG`/`-BG` metrics retain the existing convention of zeroing pixels outside the region.
+
+Use `--region crop --metrics PSNR SSIM LPIPS CLIP DINO FID` to score foreground
+bounding boxes. Results use the `-CROP` suffix. You can also mix explicit names
+with whole-image metrics, for example `--region whole --metrics PSNR PSNR-CROP`.
+`CLIP-TEXT-CROP`, `MSE-CROP`, `DISTS-CROP` and `VGG-CONTENT-CROP` are supported too.
+
+The first mask channel's positive pixels define one tight, exclusive bounding
+box per pair. Images are aligned to the mask grid, then both use exactly the
+same box, resolution and aspect ratio. All pixels inside the box are retained,
+including holes between disconnected foreground regions. Crops keep their
+native dimensions; each metric's existing minimum input-size requirements still
+apply to very small boxes. Empty masks are reported instead of falling back to
+whole-image scores. FID aggregates the full set of crops; CLIP-TEXT uses the
+corresponding prompts and needs no reference image. The Python API is
+`Evaluator(["PSNR-CROP"]).compute(predictions, targets, mask=masks)`.
 
 The JSONL interface remains available via `--data-file` and `--image-root`.
 `--data-root` cannot be combined with either; `--subsets` and `--split` apply only
