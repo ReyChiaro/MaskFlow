@@ -52,7 +52,14 @@ get_metrics = _REGISTER.get_registered_methods
 
 
 def initialize_metrics():
+    """Discover metrics and register one foreground-crop variant per whole-image metric."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     package_name = "evaluator.metrics"
     package_dir = os.path.join(base_dir, "metrics")
     _REGISTER.discover_modules(package_dir, package_name)
+    from evaluator.metrics.crop import crop_metric
+
+    metrics = get_metrics()
+    for name, metric in metrics.items():
+        if not name.endswith(("-FG", "-BG", "-CROP")) and f"{name}-CROP" not in metrics:
+            REGISTER_METRIC(f"{name}-CROP")(crop_metric(metric))

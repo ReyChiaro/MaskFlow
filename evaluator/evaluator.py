@@ -60,7 +60,7 @@ class Evaluator:
                 if self.requested_metrics is not None or target_free:
                     raise ValueError("CLIP-TEXT requires prompts.")
                 continue
-            if metric_name.endswith(("-FG", "-BG")) and not has_mask:
+            if metric_name.endswith(("-FG", "-BG", "-CROP")) and not has_mask:
                 logger.info(f"Skip {metric_name}: mask is not provided.")
                 continue
             logger.info(f"Evaluate {metric_name}")

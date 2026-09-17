@@ -30,7 +30,7 @@ from evaluator.register import get_metrics, initialize_metrics
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 DEFAULT_METRICS = ["CLIP-TEXT", "PSNR", "SSIM", "DISTS"]
-REGION_SUFFIX = {"whole": "", "foreground": "-FG", "background": "-BG"}
+REGION_SUFFIX = {"whole": "", "foreground": "-FG", "background": "-BG", "crop": "-CROP"}
 
 
 class ImageDirectory:
@@ -194,6 +194,7 @@ class MetricStep:
     name: str
     function: object
     needs_reference: bool
+    region: str = "whole"
 
 
 class EvaluationData:
@@ -379,7 +380,7 @@ def build_pipeline(
     pipeline, skipped = [], {}
     common = []
     if region not in REGION_SUFFIX:
-        common.append(f"invalid region={region!r}; choose whole, foreground or background")
+        common.append(f"invalid region={region!r}; choose {', '.join(REGION_SUFFIX)}")
     if preprocess not in {"mask-edit", "resize"}:
         common.append(f"invalid preprocess={preprocess!r}")
     if divisible_by <= 0:
@@ -402,8 +403,11 @@ def build_pipeline(
         common.extend(f"pixel-blend requires mask: {error}" for error in data.require("mask"))
     for requested in dict.fromkeys(metrics):
         requested = requested.upper()
-        base = requested[:-3] if requested.endswith(("-FG", "-BG")) else requested
-        name = base + REGION_SUFFIX.get(region, "")
+        suffix = next((suffix for suffix in REGION_SUFFIX.values() if suffix and requested.endswith(suffix)), "")
+        base = requested.removesuffix(suffix) if suffix else requested
+        # Explicit CROP names can be mixed with whole-image metrics in one run.
+        metric_region = "crop" if suffix == "-CROP" and region == "whole" else region
+        name = base + REGION_SUFFIX.get(metric_region, "")
         reasons = list(common)
         if requested != base and requested != name:
             reasons.append(f"{requested} conflicts with region={region}")
@@ -418,25 +422,25 @@ def build_pipeline(
                 reasons.append(f"CLIP model directory is missing/invalid: {clip_model_id}")
         if base in {"CLIP", "CLIP-TEXT"} and clip_batch_size < 1:
             reasons.append("clip_batch_size must be positive")
-        if region != "whole":
+        if metric_region != "whole":
             reasons.extend(f"regional metric requires mask: {error}" for error in data.require("mask"))
         if base == "FID" and len(data.rows) < 2:
             reasons.append("FID requires at least two image pairs")
-        if not reasons and region != "whole":
+        if not reasons and metric_region != "whole":
             # Empty regions do not have a meaningful per-image preservation score.
             try:
-                _, _, masks = data.views(needs_reference, enable_pixel_blend, region)
+                _, _, masks = data.views(needs_reference, enable_pixel_blend, metric_region)
                 for index in range(len(masks)):
-                    selected = masks[index] > 0 if region == "foreground" else masks[index] <= 0
+                    selected = masks[index] > 0 if metric_region in ("foreground", "crop") else masks[index] <= 0
                     if not selected.any():
-                        reasons.append(f"row {index + 1}: empty {region} after mask alignment")
+                        reasons.append(f"row {index + 1}: empty {metric_region} after mask alignment")
             except (ValueError, OSError, RuntimeError) as error:
                 reasons.append(f"mask alignment failed: {error}")
         if reasons:
             skipped[requested] = describe_errors(reasons)
             logger.warning(f"Skip {requested}: {skipped[requested]}")
         elif not any(step.name == name for step in pipeline):
-            pipeline.append(MetricStep(name, registry[name], needs_reference))
+            pipeline.append(MetricStep(name, registry[name], needs_reference, metric_region))
     return pipeline, skipped
 
 
@@ -540,7 +544,7 @@ def calculate_metrics(
         metrics = (
             DEFAULT_METRICS
             if data_file is not None or dataset is not None
-            else [name for name in registry if name != "CLIP-TEXT" and not name.endswith(("-FG", "-BG"))]
+            else [name for name in registry if name != "CLIP-TEXT" and not name.endswith(("-FG", "-BG", "-CROP"))]
         )
     data = EvaluationData(
         rows,
@@ -598,9 +602,9 @@ def calculate_metrics(
         logger.warning("No requested metrics passed validation; saving an empty report with reasons.")
     for step in pipeline:
         try:
-            predictions, references, masks = data.views(step.needs_reference, enable_pixel_blend, region)
+            predictions, references, masks = data.views(step.needs_reference, enable_pixel_blend, step.region)
             kwargs = {"prompts": data.prompts, "clip_model_id": clip_model_id, "clip_batch_size": clip_batch_size}
-            if region != "whole":
+            if step.region != "whole":
                 kwargs["mask"] = masks
             logger.info(f"Computing {step.name} on {len(rows)} images")
             score = float(step.function(predictions, references, **kwargs))
