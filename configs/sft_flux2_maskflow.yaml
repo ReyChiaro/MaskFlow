@@ -1,6 +1,6 @@
 defaults:
-  - trainset: mask_edit
-  - evalset: mask_edit
+  - trainset: hf_mask_edit
+  - evalset: hf_mask_edit
   - optimizer: prodigy
   - pipeline: flux2_maskflow
   - project: train

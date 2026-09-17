@@ -585,3 +585,30 @@ python inference.py \
   checkpoint.sft_weight_name=null checkpoint.lora_scale=1.0 \
   runtime.seed=42 pipeline.enable_pixel_blend=false output.path=result.png
 ```
+
+### Matched Qwen / FLUX MaskFlow experiments
+
+`launch_bg.sh` runs each `(mask_loss_weight, background_noise_power)` row through
+training and then evaluates its step-1250 LoRA. Select FLUX with:
+
+```bash
+PIPELINE=flux2_maskflow PRETRAINED_MODEL=/root/models/FLUX.2-dev bash launch_bg.sh
+```
+
+The default pipeline is `qwenimage_maskflow`. Both use MaskEdit-10k `scene/train`,
+90% `pm` / 10% `nm` branches, rank-256 LoRA, 1,250 steps, bf16, seed 42, and
+50-step evaluation on `scene/test`. Training-time evaluation is disabled. Set
+`FSDP_STRATEGY=full_shard` when sharding is needed; the default is `no_shard`.
+Standalone FLUX scripts use the same recipe, with mask loss weight and background
+noise power both 1.0; pass Hydra overrides for other values and a trained
+`adapters.sft.path` to the evaluation script.
+
+The shared training path is `finetune.py` → `MaskFlowTrainer` → dataset spatial
+alignment → pipeline preprocessing → VAE encoding / Poisson target refinement →
+regional noise and velocity targets → CFG branch selection → transformer → loss,
+backpropagation and LoRA export. Both MaskFlow pipelines sample source, mask and
+target VAE latents during training and use VAE modes during evaluation. The loss
+is full-image MSE plus `mask_loss_weight` times area-normalized foreground MSE;
+branches without a visible mask use full-image MSE only. FLUX retains its native
+latent patchification, normalization, positional IDs, guidance embedding and
+inference schedule.

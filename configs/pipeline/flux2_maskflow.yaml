@@ -5,6 +5,7 @@ defaults:
 _target_: pipelines.flux2.flux2_maskflow.Flux2MaskFlow
 condition_keys: [source, mask]
 rescale_cfg: true
+train_sample_mode: sample
 
 mask_dilation_kernel: 25
 mask_blur_kernel: 25

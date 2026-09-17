@@ -29,7 +29,10 @@ class Flux2MaskFlowForwardOutput(Flux2ForwardOutput):
 
 @dataclasses.dataclass
 class Flux2MaskFlow(Flux2):
+    """FLUX.2 regional flow with Qwen-aligned VAE sampling and loss supervision."""
+
     scheduler: Flux2MaskFlowScheduler | None = None
+    train_sample_mode: str = "sample"
     condition_keys: list[str] = dataclasses.field(default_factory=lambda: ["source", "mask"])
     mask_dilation_kernel: int = 25
     mask_blur_kernel: int = 25
@@ -105,13 +108,14 @@ class Flux2MaskFlow(Flux2):
         training: bool = False,
         seed: int | list[int] | None = None,
     ) -> Flux2MaskFlowForwardOutput:
+        """Encode physical conditions before dropout; sample in training, use modes in eval."""
         # Encode all physical conditions once, independently of condition dropout.
         # All ranks must make exactly one text-encoder call during training,
         # including when that encoder is sharded with FSDP.
         encode_data = data
         if training and not branch_conditions(data.cfg_branch)[0]:
             encode_data = dataclasses.replace(data, prompt=[""] * len(data.prompt))
-        base = super().prepare_eval_inputs(encode_data, seed=seed)
+        base = self._prepare_inputs(encode_data, self.train_sample_mode if training else "argmax", seed)
         result = Flux2MaskFlowForwardOutput(**{f.name: getattr(base, f.name) for f in dataclasses.fields(base)})
         if getattr(data, "mask", None) is not None:
             result.mask_latents = Flux2Pipeline._pack_latents(self.encode_mask(data.mask))
@@ -205,6 +209,7 @@ class Flux2MaskFlow(Flux2):
 
     @torch.no_grad()
     def prepare_forward_inputs(self, data):
+        """Refine the sampled target, construct regional flow, then select CFG conditions."""
         if data.target is None:
             raise ValueError("Training requires target images.")
         if getattr(data, "mask", None) is None:
@@ -243,6 +248,7 @@ class Flux2MaskFlow(Flux2):
         return result
 
     def compute_loss(self, prediction, inputs):
+        """Add area-normalized foreground MSE to full-image MSE when the mask is visible."""
         if (
             not self.enable_masked_loss
             or getattr(inputs, "mask_latents", None) is None
@@ -250,7 +256,7 @@ class Flux2MaskFlow(Flux2):
         ):
             return super().compute_loss(prediction, inputs)
         loss = F.mse_loss(prediction.float(), inputs.ground_truth.float(), reduction="none")
-        loss = self.mask_loss_weight * inputs.mask_latents * loss / (inputs.mask_ratio + 1e-6)
+        loss = loss + self.mask_loss_weight * inputs.mask_latents * loss / (inputs.mask_ratio + 1e-6)
         return {"loss": loss.flatten(1).mean(dim=1).mean(), "mask_ratio": inputs.mask_ratio.mean()}
 
     def inference_step(self, xt, prediction, sigma, next_sigma, derivative, inputs):

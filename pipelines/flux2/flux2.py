@@ -176,8 +176,9 @@ class Flux2(BasePipeline):
         decoded = self.vae.decode(latents, return_dict=False)[0]
         return self.image_processor.postprocess(decoded, output_type="pt")
 
-    def encode_conditions(self, data):
-        latents = [self.encode_image(image) for image in data.dit_conditions.values()]
+    def encode_conditions(self, data, sample_mode="argmax"):
+        """Encode reference images with the same VAE sampling mode as the target."""
+        latents = [self.encode_image(image, sample_mode) for image in data.dit_conditions.values()]
         packed = [Flux2Pipeline._pack_latents(image) for image in latents]
         ids = None
         if latents:
@@ -191,12 +192,13 @@ class Flux2(BasePipeline):
         return packed, ids
 
     @torch.no_grad()
-    def prepare_eval_inputs(
+    def _prepare_inputs(
         self,
         data: PreprocessOutput,
-        text_cfg_scale: float = 1.0,
+        sample_mode: str = "argmax",
         seed: int | list[int] | None = None,
     ) -> Flux2ForwardOutput:
+        """Prepare shared text, reference latents, noise and coordinates for train/eval."""
         prompt_embeds, text_ids = self.encode_prompt(data.prompt)
         height, width = data.target.shape[-2:] if data.target is not None else (data.height, data.width)
         generators = self.generator
@@ -212,7 +214,7 @@ class Flux2(BasePipeline):
             device=self.device,
             generator=generators,
         )
-        conditions, condition_ids = self.encode_conditions(data)
+        conditions, condition_ids = self.encode_conditions(data, sample_mode)
         image_ids = torch.cat([latent_ids, condition_ids], dim=1) if condition_ids is not None else latent_ids
         result = Flux2ForwardOutput(
             prompt_embeds=prompt_embeds,
@@ -224,6 +226,17 @@ class Flux2(BasePipeline):
             height=height,
             width=width,
         )
+        return result
+
+    @torch.no_grad()
+    def prepare_eval_inputs(
+        self,
+        data: PreprocessOutput,
+        text_cfg_scale: float = 1.0,
+        seed: int | list[int] | None = None,
+    ) -> Flux2ForwardOutput:
+        """Use deterministic VAE encodings and optionally encode negative text for CFG."""
+        result = self._prepare_inputs(data, seed=seed)
         if text_cfg_scale > 1:
             negative_prompt = data.negative_prompt or [""] * len(data.prompt)
             result.negative_prompt_embeds, result.negative_text_ids = self.encode_prompt(negative_prompt)
