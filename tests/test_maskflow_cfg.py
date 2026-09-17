@@ -235,6 +235,34 @@ class TrainerTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_flux_loss_matches_qwen_with_foreground_and_background_errors(self):
+        """Mask weighting must retain background gradients, including at weight zero."""
+        qwen, _ = qwen_fixture()
+        flux, data = flux_fixture()
+        inputs = flux.prepare_forward_inputs(data)
+        prediction = inputs.ground_truth + torch.arange(16).reshape(1, 4, 4) / 16
+        for enabled in (False, True):
+            qwen.enable_masked_loss = flux.enable_masked_loss = enabled
+            for weight in (0.0, 0.5, 1.0, 2.0):
+                qwen.mask_loss_weight = flux.mask_loss_weight = weight
+                for branch in BRANCHES:
+                    inputs.cfg_branch = branch
+                    expected = qwen.compute_loss(
+                        prediction, inputs.ground_truth, inputs.mask_ratio,
+                        inputs.mask_latents if branch.endswith('m') else None,
+                    )
+                    torch.testing.assert_close(flux.compute_loss(prediction, inputs)['loss'], expected['loss'])
+
+    def test_flux_samples_all_training_images_and_uses_modes_for_eval(self):
+        """Source, mask and target share training sampling; evaluation remains deterministic."""
+        pipe, data = flux_fixture()
+        with patch.object(pipe, 'encode_image', side_effect=lambda image, mode: image.clone()) as encode:
+            pipe.prepare_forward_inputs(data)
+            self.assertEqual([call.args[1] for call in encode.call_args_list], ['sample'] * 3)
+            encode.reset_mock()
+            pipe.prepare_eval_inputs(data, seed=42)
+            self.assertEqual([call.args[1] for call in encode.call_args_list], ['argmax'] * 2)
+
     def test_background_power_training_and_poisson_conversion(self):
         for factory in (qwen_fixture, flux_fixture):
             for gamma in (1.0, 2.0):
@@ -299,7 +327,7 @@ class PipelineTests(unittest.TestCase):
                             if branch.startswith('n'):
                                 self.assertEqual(pipe.prompt_calls[-1], [''])
 
-    def test_missing_mask_branches_supervise_background(self):
+    def test_all_branches_supervise_background(self):
         for factory in (qwen_fixture, flux_fixture):
             pipe, data = factory()
             for branch in BRANCHES:
@@ -324,7 +352,7 @@ class PipelineTests(unittest.TestCase):
                     pipe.forward_step({})['loss'].backward()
                     outside = inputs.mask_latents == 0
                     background_gradient = predictions[0].grad[outside]
-                    self.assertEqual(bool(background_gradient.abs().sum() > 0), branch.endswith('n'))
+                    self.assertGreater(background_gradient.abs().sum().item(), 0)
 
     def test_eval_encoding_has_no_mask_leak_and_correct_ids(self):
         for factory in (qwen_fixture, flux_fixture):
@@ -416,6 +444,10 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(cfg.pipeline.scheduler.background_noise_power, 1.0)
                 self.assertEqual(cfg.runtime.mask_cfg_scale, 1.)
                 self.assertIn('maskflow', cfg.pipeline._target_)
+            cfg = compose(config_name='eval_flux2_maskflow')
+            self.assertEqual(cfg.pipeline.train_sample_mode, 'sample')
+            self.assertEqual(cfg.num_inference_steps, 50)
+            self.assertEqual(cfg.sft_adapter.r, 256)
 
     def test_inference_entry_passes_cfg_and_saves_result(self):
         with tempfile.TemporaryDirectory() as directory:

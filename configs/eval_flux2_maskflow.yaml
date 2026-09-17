@@ -1,5 +1,5 @@
 defaults:
-  - eval_maskflow
+  - eval_qwenimage_maskflow
   - override pipeline: flux2_maskflow
   - override adapter@sft_adapter: flux2_lora
   - _self_
