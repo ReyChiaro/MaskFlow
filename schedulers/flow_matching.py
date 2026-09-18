@@ -12,7 +12,7 @@ from schedulers.base_scheduler import BaseScheduler
 
 @dataclasses.dataclass
 class RectifiedFlowMatchingScheduler(BaseScheduler):
-    weighting_scheme: Literal["logit_normal", "mode"] | None = ("logit_normal",)
+    weighting_scheme: Literal["logit_normal", "mode"] | None = "logit_normal"
     logit_normal_mean: float = 0.0
     logit_normal_std: float = 1.0
     mode_scale: float = 1.29
