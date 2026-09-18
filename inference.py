@@ -26,6 +26,7 @@ def build_pipeline(cfg: DictConfig, device: torch.device, dtype: torch.dtype) ->
         device=device,
         dtype=dtype,
     )
+    pipeline.load_pretrained_weights()
 
     load_inference_loras(pipeline.transformer, cfg.checkpoint, cfg.checkpoint.lora_scale)
     pipeline.vae.eval()

@@ -1,4 +1,5 @@
 import dataclasses
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -17,12 +18,11 @@ class LoraTrainer(BaseTrainer):
     lora_configs: OmegaConf | None = None
     adapter_state_dict_dir: str = "lora_adapter"
 
-    def _init_trainable(self):
-        add_trainable_lora(
+    def _init_trainable(self) -> None:
+        """Insert meta adapters and replay their initialization on rank 0 CPU at load time."""
+        self.pipe.configure_model(
             self.pipe.transformer,
-            self.lora_configs,
-            self.device,
-            self._train_dtype,
+            partial(add_trainable_lora, cfgs=self.lora_configs, dtype=self._train_dtype),
         )
 
     def save_lora_adapter_checkpoint(self, checkpoint_dir: Path):

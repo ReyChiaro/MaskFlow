@@ -51,7 +51,7 @@ fsdp_configs:
     iterable: false
     reshard_after_forward: false
 
-  text_pipeline.text_encoder.model:
+  text_pipeline.text_encoder:
     iterable: false
     reshard_after_forward: false
 

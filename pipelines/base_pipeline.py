@@ -1,4 +1,5 @@
 import dataclasses
+import importlib
 from typing import Any, Iterable
 
 import torch
@@ -11,6 +12,7 @@ from PIL import Image
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 from pipelines.utils import get_nested_attr
+from pipelines.model_loading import ModelLoader, ModelTransform
 from trainer.parallel.fsdp_strategy import FSDPStrategy
 from trainer.parallel.handler import parallel_handler
 from utils.summary import summarize_model
@@ -82,6 +84,53 @@ class BasePipeline:
     fsdp_modules: list | None = None
 
     _fsdp_module_configs: list[dict] | None = None
+    _model_loaders: dict[torch.nn.Module, ModelLoader] = dataclasses.field(init=False, default_factory=dict)
+
+    def initialize_pipeline(self, pipeline_class: type[DiffusionPipeline]) -> None:
+        """Build every neural component on meta using the native pipeline metadata."""
+        config = pipeline_class.load_config(self.pretrained_model)
+        components: dict[str, torch.nn.Module] = {}
+        for name, entry in config.items():
+            if name.startswith("_") or not isinstance(entry, (list, tuple)) or entry[0] is None:
+                continue
+            model_class = getattr(importlib.import_module(entry[0]), entry[1])
+            if issubclass(model_class, torch.nn.Module):
+                loader = ModelLoader(model_class, self.pretrained_model, name, self.dtype)
+                components[name] = loader.build()
+                self._model_loaders[components[name]] = loader
+        # Supplying all neural components prevents from_pretrained from loading their weights.
+        self.text_pipeline = pipeline_class.from_pretrained(
+            self.pretrained_model, **components, torch_dtype=self.dtype
+        )
+        self.vae = components["vae"]
+        self.transformer = components["transformer"]
+        self.text_pipeline.register_modules(transformer=None)
+        self.image_processor = self.text_pipeline.image_processor
+
+    def create_transformer(self) -> torch.nn.Module:
+        """Build an additional empty transformer for trainers with multiple roles."""
+        source = self._model_loaders[self.transformer]
+        loader = dataclasses.replace(source, transforms=[])
+        transformer = loader.build()
+        self._model_loaders[transformer] = loader
+        return transformer
+
+    def configure_model(
+        self, model: torch.nn.Module, transform: ModelTransform, *, update_structure: bool = True
+    ) -> None:
+        """Record a CPU weight operation; apply structural changes before sharding.
+
+        Adapter insertion changes structure; merging an existing adapter only
+        changes weights and is deferred until the CPU checkpoint is available.
+        """
+        if update_structure:
+            transform(model)
+        self._model_loaders[model].transforms.append(transform)
+
+    def load_pretrained_weights(self, *, broadcast: bool = False) -> None:
+        """Load after placement; training broadcasts, independent inference ranks do not."""
+        for model, loader in self._model_loaders.items():
+            loader.load(model, self.device, broadcast=broadcast)
 
     @property
     def summary(self) -> dict[str, dict[str, int | float]]:
@@ -123,10 +172,8 @@ class BasePipeline:
                     params.append(p)
         return params
 
-    def setup_fsdp_modules(self, fsdp_strategy: FSDPStrategy, device: torch.device, dtype: torch.dtype):
-        # VAE: Full parameters to all devices
-        self.vae.to(device, dtype=dtype)
-
+    def setup_fsdp_modules(self, fsdp_strategy: FSDPStrategy, device: torch.device, dtype: torch.dtype) -> "BasePipeline":
+        """Define parameter placement on empty models; weights are loaded separately."""
         mp_policy = MixedPrecisionPolicy(
             param_dtype=dtype,
             reduce_dtype=torch.float32,
@@ -138,9 +185,6 @@ class BasePipeline:
             # Whole modules will be loaded into each device.
             if self.fsdp_configs is not None:
                 logger.warning(f"FSDPStrategy is {fsdp_strategy}, fsdp_configs will be ignored.")
-
-            self.text_pipeline.to(device, dtype=dtype)
-            self.transformer.to(device, dtype=dtype)
 
             self.fsdp_modules = [self.transformer, self.text_pipeline.text_encoder]
 
@@ -186,10 +230,9 @@ class BasePipeline:
         fsdp_strategy: FSDPStrategy,
         device: torch.device,
         dtype: torch.dtype,
-    ):
+    ) -> torch.nn.Module:
         r"""Apply the pipeline's transformer placement policy to another transformer."""
         if FSDPStrategy.is_no_shard(fsdp_strategy):
-            transformer.to(device, dtype=dtype)
             return transformer
 
         if not FSDPStrategy.is_full_shard(fsdp_strategy):

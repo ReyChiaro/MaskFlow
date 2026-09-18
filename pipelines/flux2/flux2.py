@@ -42,42 +42,10 @@ class Flux2(BasePipeline):
     transformer: Flux2Transformer2DModel = dataclasses.field(init=False, default=None)
     text_pipeline: Flux2Pipeline = dataclasses.field(init=False, default=None)
 
-    def __post_init__(self):
-        if self.scheduler is None:
-            raise ValueError("A Flux2FlowMatchingScheduler must be provided in the pipeline config.")
-        self.vae = (
-            AutoencoderKLFlux2.from_pretrained(
-                self.pretrained_model,
-                subfolder="vae",
-                torch_dtype=self.dtype,
-            )
-            .to(self.device)
-            .requires_grad_(False)
-            .eval()
-        )
-        self.transformer = self.load_transformer()
-        # Keep the native pipeline as the text/codec helper without loading a second transformer or VAE.
-        self.text_pipeline = Flux2Pipeline.from_pretrained(
-            self.pretrained_model,
-            vae=self.vae,
-            transformer=None,
-            torch_dtype=self.dtype,
-        ).to(self.device)
-        self.text_pipeline.text_encoder.requires_grad_(False).eval()
-        self.image_processor = self.text_pipeline.image_processor
+    def __post_init__(self) -> None:
+        self.initialize_pipeline(Flux2Pipeline)
         if self.scheduler.native_scheduler is None:
             self.scheduler.native_scheduler = self.text_pipeline.scheduler
-
-    def load_transformer(self):
-        return (
-            Flux2Transformer2DModel.from_pretrained(
-                self.pretrained_model,
-                subfolder="transformer",
-                torch_dtype=self.dtype,
-            )
-            .to(self.device)
-            .requires_grad_(False)
-        )
 
     @property
     def vae_scale_factor(self):

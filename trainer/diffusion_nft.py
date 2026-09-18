@@ -108,20 +108,19 @@ class DiffusionNFTTrainer(LoraTrainer):
         if not isinstance(self.reward_fn, RewardModel):
             raise TypeError("reward_configs must instantiate models.rewards.rewards.RewardModel.")
 
-    def _init_trainable(self):
+    def _init_trainable(self) -> None:
         if self.sft_lora_path:
-            merge_lora(self.pipe.transformer, self.sft_lora_path, self.sft_adapter_name, self.sft_lora_scale)
+            self.pipe.configure_model(
+                self.pipe.transformer,
+                lambda model: merge_lora(model, self.sft_lora_path, self.sft_adapter_name, self.sft_lora_scale),
+                update_structure=False,
+            )
         super()._init_trainable()
-        if self.world_size > 1 and FSDPStrategy.is_full_shard(self.fsdp_strategy):
-            # FSDP2 does not broadcast initialization. Synchronize freshly random
-            # LoRA factors before slicing them; NO_SHARD does this in BaseTrainer.
-            with torch.no_grad():
-                for param in self.pipe.trainable_params:
-                    dist.broadcast(param, src=0)
 
-    def _init_parallel_modules(self):
-        super()._init_parallel_modules()
-        # Capture AFTER sharding and rank-0 synchronization. Never cache pre-FSDP
+    def _init_model_weights(self) -> None:
+        """Capture actor/reference snapshots only after loading synchronized real weights."""
+        super()._init_model_weights()
+        # Capture AFTER loading and rank-0 synchronization. Never cache pre-FSDP
         # Parameter objects. DTensor clones retain the same mesh/placements.
         self.actor_params: dict[str, torch.nn.Parameter] = {
             n: p for n, p in self.pipe.transformer.named_parameters() if p.requires_grad

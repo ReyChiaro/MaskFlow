@@ -14,9 +14,9 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_
 def add_trainable_lora(
     transformer: torch.nn.Module,
     cfgs: OmegaConf,
-    device: torch.device,
     dtype: torch.dtype,
 ) -> list[torch.nn.Parameter]:
+    """Insert adapters on the model's current device (meta during construction)."""
     lora_config = LoraConfig(
         r=cfgs.r,
         lora_alpha=cfgs.lora_alpha,
@@ -32,9 +32,9 @@ def add_trainable_lora(
     params = []
     for name, param in transformer.named_parameters():
         if cfgs.adapter_name in name and "lora_" in name:
-            param.data = param.to(device=device, dtype=dtype).data
+            param.data = param.to(dtype=dtype).data
             if param.grad is not None:
-                param.grad = param.grad.to(device=device, dtype=dtype)
+                param.grad = param.grad.to(dtype=dtype)
             param.requires_grad_(True)
             params.append(param)
 

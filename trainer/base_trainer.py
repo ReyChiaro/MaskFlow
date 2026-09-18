@@ -90,7 +90,7 @@ class BaseTrainer:
     def __post_init__(self):
         r"""
         Initialize init_handlers
-        NOTE: The sequence init_pipeline->init_trainable->init_parallel_modules->init_optimizer
+        NOTE: Build -> adapt -> shard -> load weights -> create optimizer
             *cannot* be disrupted.
         """
         self.init_handlers = [
@@ -99,6 +99,7 @@ class BaseTrainer:
             self._init_pipeline,
             self._init_trainable,
             self._init_parallel_modules,  # Must be called after init_trainable
+            self._init_model_weights,
             self._init_optimizer,
             self._init_data_loader,
         ]
@@ -151,41 +152,29 @@ class BaseTrainer:
         os.makedirs(self.log_dir, exist_ok=True)
         logger.info(f"Project initialized.")
 
-    def _init_pipeline(self):
+    def _init_pipeline(self) -> None:
+        """Construct component metadata and empty parameters; no weights are loaded yet."""
         self.pipe: BasePipeline = instantiate(
             self.pipe_configs, generator=self.generator, device=self.device, dtype=self._eval_dtype
         )
         logger.info(f"Pipeline initialized.")
 
-    def _init_trainable(self):
+    def _init_trainable(self) -> None:
         r"""
         Initialize trainable parameters in the pipeline
         or add trainable adapters on it.
         """
         pass
 
-    def _init_parallel_modules(self):
-        r""" """
-        if FSDPStrategy.is_no_shard(self.fsdp_strategy):
-            self.pipe.setup_fsdp_modules(
-                fsdp_strategy=FSDPStrategy.NO_SHARD,
-                device=self.device,
-                dtype=self._train_dtype,
-            )
-
-        elif FSDPStrategy.is_full_shard(self.fsdp_strategy):
-            self.pipe.setup_fsdp_modules(
-                fsdp_strategy=FSDPStrategy.FULL_SHARD,
-                device=self.device,
-                dtype=self._train_dtype,
-            )
-
-        else:
-            logger.warning(f"Unsupported FSDPStrategy: {self.fsdp_strategy}.")
-
+    def _init_parallel_modules(self) -> None:
+        """Shard empty parameters before any pretrained weights are materialized."""
+        self.pipe.setup_fsdp_modules(self.fsdp_strategy, self.device, self._train_dtype)
         if self.enable_gradient_checkpoint:
             self.unwrap_model(self.pipe.transformer).enable_gradient_checkpointing()
 
+    def _init_model_weights(self) -> None:
+        """Load base weights and initialized adapters before creating parameter consumers."""
+        self.pipe.load_pretrained_weights(broadcast=True)
         self.sync_trainable_parameters()
 
     def _init_optimizer(self):
