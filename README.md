@@ -618,6 +618,21 @@ Standalone FLUX scripts use the same recipe, with mask loss weight and backgroun
 noise power both 1.0; pass Hydra overrides for other values and a trained
 `adapters.sft.path` to the evaluation script.
 
+For FLUX-only FSDP training, use the explicit experiment launcher:
+
+```bash
+NPROC_PER_NODE=8 PRETRAINED_MODEL=/root/models/FLUX.2-dev bash launch_bg_flux_fsdp.sh
+```
+
+Edit its `EXPERIMENTS` list to select mask-loss weights and background-noise powers.
+It uses `trainer.fsdp_strategy=full_shard` and the existing FLUX configuration:
+both transformer block lists and text-encoder language layers are sharded before
+their root modules. The VAE stays replicated. Runs are saved under
+`outputs/experiments/FLUX2dev-MaskFlow-FSDP-r256/`; each row exports its step-1250
+LoRA and proceeds to the next experiment. Evaluation is separate because
+`evaluate.py` loads a complete model on each GPU. Training constructs meta models,
+shards them first, and loads pretrained weights afterwards as described below.
+
 The shared training path is `finetune.py` → `MaskFlowTrainer` → dataset spatial
 alignment → pipeline preprocessing → VAE encoding / Poisson target refinement →
 regional noise and velocity targets → CFG branch selection → transformer → loss,
@@ -627,3 +642,35 @@ is full-image MSE plus `mask_loss_weight` times area-normalized foreground MSE;
 branches without a visible mask use full-image MSE only. FLUX retains its native
 latent patchification, normalization, positional IDs, guidance embedding and
 inference schedule.
+
+
+### FSDP2 model initialization
+
+All QwenImage and FLUX pipelines now construct neural components from configuration
+on meta. Training inserts LoRA adapters, applies the existing `fsdp_configs`, then
+loads weights before creating optimizers. There is no eager-loading FSDP path.
+Rank 0 loads one component at a time on CPU; PyTorch DCP broadcasts its weights
+into the existing parameter shards. The CPU source also applies any SFT LoRA
+fusion and initializes new trainable adapters, giving every rank consistent
+parameters. Persistent buffers load from the checkpoint; nonpersistent buffers
+are restored from the CPU model. Qwen's text-encoder root now includes its output
+head in the sharding policy.
+
+DMD student/fake/teacher models use this same loader. DMD parameter lists and NFT
+actor/old/reference snapshots are collected only after materialization. Existing
+training checkpoints restore after this initialization, before training resumes.
+The VAE remains replicated. `no_shard` and standalone inference use the same
+construction/loading lifecycle but retain full parameters per device; inference
+workers load independently, so workers with no samples need no collective calls.
+
+Direct Python pipeline construction now returns unloaded models. Call
+`pipe.load_pretrained_weights()` before inference; training calls it with
+`broadcast=True` after `setup_fsdp_modules`. The built-in training, evaluation and
+inference entry points already follow this ordering. Adding another native
+Diffusers pipeline uses its component metadata and the same loader, without
+model-name branches.
+
+Initialization no longer needs a full pretrained transformer/text encoder on any
+GPU. Rank 0 still needs CPU RAM for a full component, and GPU loading temporarily
+holds individual broadcast tensors. Training also needs memory for layer
+all-gathers, activations and the replicated VAE.

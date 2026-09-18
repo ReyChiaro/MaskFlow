@@ -114,6 +114,8 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
 
     # -------- Pipeline and LoRA loading -------- #
     pipe: BasePipeline = instantiate(cfgs.pipeline, device=device, dtype=weight_dtype)
+    # Ranks without samples already returned; inference loads independently per rank.
+    pipe.load_pretrained_weights()
     load_lora_adapters(pipe, cfgs.adapters)
     pipe.transformer.requires_grad_(False).eval()
     pipe.vae.eval()

@@ -58,7 +58,7 @@ def make_trainer(**kwargs):
     trainer.current_epoch = 0
     torch.manual_seed(23)
     model = TinyTransformer()
-    add_trainable_lora(model, cfg, trainer.device, torch.float32)
+    add_trainable_lora(model, cfg, torch.float32)
     trainer.pipe = SimpleNamespace(
         transformer=model, fsdp_modules=[model],
         scheduler=MaskFlowScheduler(unmask_with="noisy_target"),

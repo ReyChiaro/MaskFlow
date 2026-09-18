@@ -43,6 +43,7 @@ class EvaluationTests(unittest.TestCase):
                 pipe = SimpleNamespace(
                     transformer=torch.nn.Linear(1, 1), vae=torch.nn.Identity(),
                     text_pipeline=SimpleNamespace(text_encoder=torch.nn.Identity()),
+                    load_pretrained_weights=Mock(),
                 )
 
                 def eval_step(batch, **kwargs):

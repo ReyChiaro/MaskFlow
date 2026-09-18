@@ -40,29 +40,8 @@ class QwenImageEditPlus(BasePipeline):
     transformer: QwenImageTransformer2DModel = field(init=False, default=None)
     text_pipeline: QwenImageEditPlusPipeline = field(init=False, default=None)
 
-    def __post_init__(self):
-        self.vae = (
-            AutoencoderKLQwenImage.from_pretrained(self.pretrained_model, subfolder="vae", torch_dtype=self.dtype)
-            .to(self.device)
-            .requires_grad_(False)
-        )
-        self.transformer = self.load_transformer()
-        self.text_pipeline = QwenImageEditPlusPipeline.from_pretrained(
-            self.pretrained_model, vae=None, transformer=None, torch_dtype=self.dtype
-        ).to(self.device)
-        self.text_pipeline.text_encoder.requires_grad_(False)
-        self.image_processor = self.text_pipeline.image_processor
-
-    def load_transformer(self) -> QwenImageTransformer2DModel:
-        return (
-            QwenImageTransformer2DModel.from_pretrained(
-                self.pretrained_model,
-                subfolder="transformer",
-                torch_dtype=self.dtype,
-            )
-            .to(self.device)
-            .requires_grad_(False)
-        )
+    def __post_init__(self) -> None:
+        self.initialize_pipeline(QwenImageEditPlusPipeline)
 
     @property
     def vae_scale_factor(self) -> int:
