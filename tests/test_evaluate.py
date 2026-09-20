@@ -73,13 +73,82 @@ class EvaluationTests(unittest.TestCase):
             "sft_adapter": {"adapter_name": "maskflow"},
             "adapters": {"sft": {"path": "weights.safetensors", "cfg": "${sft_adapter}", "lora_scale": 0.25}},
         })
-        pipe = SimpleNamespace(transformer=Mock())
+        pipe = SimpleNamespace(transformer=Mock(), configure_model=Mock())
         with patch.object(evaluate, "merge_lora") as merge:
             evaluate.load_lora_adapters(pipe, cfg.adapters)
-            merge.assert_called_once_with(pipe.transformer, "weights.safetensors", "maskflow", lora_scale=0.25)
+            merge.assert_not_called()
+            args, kwargs = pipe.configure_model.call_args
+            self.assertIs(args[0], pipe.transformer)
+            self.assertEqual(kwargs, {"update_structure": False})
+            reference = Mock()
+            args[1](reference)
+            merge.assert_called_once_with(
+                reference, lora_path="weights.safetensors", adapter_name="maskflow", lora_scale=0.25,
+            )
             cfg.adapters.sft.path = None
             with self.assertRaisesRegex(ValueError, "adapters.sft.path"):
                 evaluate.load_lora_adapters(pipe, cfg.adapters)
+
+    def test_fsdp_ranks_share_batches_and_only_rank_zero_saves(self):
+        """Uneven and empty datasets must keep FSDP collectives aligned."""
+        for size, world_size in [(5, 2), (1, 3), (0, 2)]:
+            with self.subTest(size=size), tempfile.TemporaryDirectory() as tmp:
+                cfg = OmegaConf.create({
+                    "base_seed": 42, "eval_seed": 123, "weight_dtype": "fp32",
+                    "fsdp_strategy": "full_shard", "batch_size_per_process": 2,
+                    "num_workers": 0, "evalset": {}, "pipeline": {}, "adapters": {},
+                    "text_cfg_scale": 4.0, "num_inference_steps": 2,
+                    "eval_with_position_prompt": False,
+                })
+                for rank in range(world_size):
+                    seen, events = [], []
+
+                    def shard(*args):
+                        self.assertFalse(torch.is_inference_mode_enabled())
+                        events.append("shard")
+
+                    def load(*, broadcast):
+                        self.assertFalse(torch.is_inference_mode_enabled())
+                        self.assertTrue(broadcast)
+                        events.append("load")
+
+                    def eval_step(batch, **kwargs):
+                        self.assertEqual(events, ["shard", "load"])
+                        self.assertEqual(kwargs["seed"], 123)
+                        self.assertTrue(torch.is_inference_mode_enabled())
+                        seen.extend(batch["image_name"])
+                        count = len(batch["image_name"])
+                        return {"output": torch.ones(count, 3, 4, 4), "mask": torch.ones(count, 1, 4, 4)}
+
+                    pipe = SimpleNamespace(
+                        transformer=torch.nn.Linear(1, 1), vae=torch.nn.Identity(),
+                        text_pipeline=SimpleNamespace(text_encoder=torch.nn.Identity()),
+                        setup_fsdp_modules=Mock(side_effect=shard),
+                        load_pretrained_weights=Mock(side_effect=load), eval_step=eval_step,
+                    )
+                    with (
+                        patch.object(evaluate, "instantiate", side_effect=[ToyDataset(size), pipe]),
+                        patch.object(evaluate, "save_image") as save,
+                    ):
+                        evaluate.run_evaluation(cfg, torch.device("cpu"), rank, world_size, Path(tmp))
+                    self.assertEqual(seen, [f"sample_{i}" for i in range(size)])
+                    self.assertEqual(save.call_count, size * 2 if rank == 0 else 0)
+                    self.assertEqual(events, ["shard", "load"] if size else [])
+
+    def test_fsdp_initializes_parallel_handler_even_for_one_rank(self):
+        """A single-rank torchrun still needs a process group for FSDP."""
+        cfg = OmegaConf.create({"fsdp_strategy": "full_shard", "project": {"evaluation_dir": "/tmp/eval"}})
+        with (
+            patch.dict(os.environ, {"WORLD_SIZE": "1", "RANK": "0", "LOCAL_RANK": "0"}),
+            patch.object(torch.cuda, "set_device"),
+            patch.object(evaluate.parallel_handler, "setup_parallel") as setup,
+            patch.object(evaluate.dist, "is_initialized", return_value=True),
+            patch.object(evaluate.dist, "destroy_process_group") as destroy,
+            patch.object(evaluate, "run_evaluation"),
+        ):
+            evaluate.evaluate.__wrapped__(cfg)
+        setup.assert_called_once()
+        destroy.assert_called_once()
 
     def test_worker_uses_broadcast_directory_and_cleans_up_on_failure(self):
         cfg = OmegaConf.create({"project": {"evaluation_dir": "worker-local-time"}})

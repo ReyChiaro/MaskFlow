@@ -58,8 +58,9 @@ def initialize_metrics():
     package_dir = os.path.join(base_dir, "metrics")
     _REGISTER.discover_modules(package_dir, package_name)
     from evaluator.metrics.crop import crop_metric
+    from evaluator.metrics.seam import BOUNDARY_METRICS
 
     metrics = get_metrics()
     for name, metric in metrics.items():
-        if not name.endswith(("-FG", "-BG", "-CROP")) and f"{name}-CROP" not in metrics:
+        if name not in BOUNDARY_METRICS and not name.endswith(("-FG", "-BG", "-CROP")) and f"{name}-CROP" not in metrics:
             REGISTER_METRIC(f"{name}-CROP")(crop_metric(metric))

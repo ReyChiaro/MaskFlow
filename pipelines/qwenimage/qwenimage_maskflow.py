@@ -101,6 +101,12 @@ class QwenImageMaskFlow(QwenImageEditPlus):
     poisson_num_iter: int = 50
     poisson_momentum: float = 0.1
 
+    # Optional complete Poisson-off/on trajectory comparison; doubles denoising forwards.
+    velocity_visualization_dir: str | None = None
+    velocity_visualization_steps: list[int] | None = None
+    velocity_visualization_max_samples: int = 1
+    velocity_visualization_grid: int = 24
+
     def __post_init__(self):
         super().__post_init__()
 
@@ -538,6 +544,53 @@ class QwenImageMaskFlow(QwenImageEditPlus):
         mask_latents = model_inputs.mask_latents
         noise = copy.deepcopy(model_inputs.noise)
 
+        velocity_trace = None
+        if self.velocity_visualization_dir is not None:
+            from pipelines.velocity_visualization import VelocityTrace
+
+            velocity_trace = VelocityTrace(
+                self.velocity_visualization_dir,
+                raw_source,
+                mask,
+                num_inference_steps,
+                steps=self.velocity_visualization_steps,
+                max_samples=self.velocity_visualization_max_samples,
+                grid=self.velocity_visualization_grid,
+                names=batch.get("image_name"),
+                metadata={
+                    "seed": seed if isinstance(seed, int) else list(seed),
+                    "text_cfg_scale": text_cfg_scale,
+                    "mask_cfg_scale": mask_cfg_scale,
+                    "interaction_cfg_scale": interaction_cfg_scale,
+                    "rescale_cfg": self.rescale_cfg,
+                    "unmask_with": self.scheduler.unmask_with,
+                    "background_noise_power": self.scheduler.background_noise_power,
+                    "returned_trajectory": "on" if self.enable_poisson_infer else "off",
+                    "enable_pixel_blend": self.enable_pixel_blend,
+                    "poisson_steps": list(self.poisson_steps),
+                    "poisson_lambda_e": self.poisson_lambda_e,
+                    "poisson_lambda_s": self.poisson_lambda_s,
+                    "poisson_num_iter": self.poisson_num_iter,
+                    "poisson_momentum": self.poisson_momentum,
+                },
+            )
+
+        # Empty capture selection disables the extra trajectory as well as export.
+        if velocity_trace is not None and not velocity_trace.steps:
+            velocity_trace = None
+        selected = "on" if self.enable_poisson_infer else "off"
+        if velocity_trace is not None or self.enable_poisson_infer:
+            if len(self.poisson_steps) != 2 or not 0 <= self.poisson_steps[0] <= self.poisson_steps[1] <= 1:
+                raise ValueError("poisson_steps must be [start, end] within [0, 1].")
+        # Share encoded conditions and the EXACT initial noise, but never subsequent states.
+        # Keep both full batches, including on FSDP ranks, for identical forward shapes.
+        states = {"off": noise.clone(), "on": noise.clone()} if velocity_trace is not None else {selected: xt}
+
+        def unpack(value):
+            return QwenImageEditPlusPipeline._unpack_latents(
+                value, model_inputs.height, model_inputs.width, self.vae_scale_factor
+            ).squeeze(2)
+
         with self.scheduler.inference(num_inference_steps, img_seq_len=xt.shape[1]) as inferencer:
             for step_index, (t, curr_sigma, next_sigma, d_sigma_dt) in enumerate(
                 tqdm(inferencer, total=num_inference_steps), start=1
@@ -545,44 +598,59 @@ class QwenImageMaskFlow(QwenImageEditPlus):
                 curr_sigma = curr_sigma.to(xt.device)
                 next_sigma = next_sigma.to(xt.device)
                 d_sigma_dt = d_sigma_dt.to(xt.device)
-
                 timestep = t.expand(xt.shape[0]).to(device=self.device, dtype=self.dtype)
-                cfg_branches = model_inputs.cfg_branches
-
-                branch_preds = {}
-                for k, branch in cfg_branches.items():
-                    branch_preds[k] = self.denoise_cfg_branch(branch, xt, timestep)
-                pred = combine_predictions(
-                    branch_preds, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, self.rescale_cfg
+                in_poisson_window = (
+                    "on" in states and self.poisson_steps[0] <= t.item() <= self.poisson_steps[1]
                 )
-
-                # Optionally handle Poisson refinement
-                if self.enable_poisson_infer and self.poisson_steps[0] <= t.item() <= self.poisson_steps[1]:
-                    pred = self.apply_poisson_to_prediction(
-                        xt=xt,
-                        pred=pred,
-                        curr_sigma=curr_sigma,
-                        d_sigma_dt=d_sigma_dt,
-                        source=source,
-                        mask_latents=mask_latents,
-                        noise=noise,
-                        height=model_inputs.height,
-                        width=model_inputs.width,
-                        disable_progress_bar=True,
+                predictions = {}
+                next_states = {}
+                for name, state in states.items():
+                    branch_preds = {
+                        key: self.denoise_cfg_branch(branch, state, timestep)
+                        for key, branch in model_inputs.cfg_branches.items()
+                    }
+                    pred = combine_predictions(
+                        branch_preds, text_cfg_scale, mask_cfg_scale, interaction_cfg_scale, self.rescale_cfg
+                    )
+                    if name == "on" and in_poisson_window:
+                        pred = self.apply_poisson_to_prediction(
+                            xt=state, pred=pred, curr_sigma=curr_sigma, d_sigma_dt=d_sigma_dt,
+                            source=source, mask_latents=mask_latents, noise=noise,
+                            height=model_inputs.height, width=model_inputs.width, disable_progress_bar=True,
+                        )
+                    predictions[name] = pred
+                    # Each branch integrates its OWN prediction, including background projection.
+                    next_states[name] = self.scheduler.step(
+                        state, pred, curr_sigma, next_sigma, d_sigma_dt, source, mask_latents, noise
                     )
 
-                # runtime_mask = self.inference_mask(timestep, mask_latents)
-                xt = self.scheduler.step(xt, pred, curr_sigma, next_sigma, d_sigma_dt, source, mask_latents, noise)
+                if velocity_trace is not None:
+                    velocity_trace.record_step(
+                        step_index, curr_sigma, next_sigma, in_poisson_window,
+                        predictions["off"], predictions["on"], next_states["off"], next_states["on"],
+                    )
+                    if velocity_trace.wants(step_index):
+                        count = velocity_trace.sample_count
+                        velocity_trace.capture(
+                            step_index, t, curr_sigma, in_poisson_window,
+                            unpack(predictions["off"][:count]), unpack(predictions["on"][:count]),
+                            state_off=unpack(states["off"][:count]), state_on=unpack(states["on"][:count]),
+                        )
+                states = next_states
 
-        output = QwenImageEditPlusPipeline._unpack_latents(
-            xt, model_inputs.height, model_inputs.width, self.vae_scale_factor
-        )
-        output = self.decode_image(output)
+        outputs = {}
+        for name, state in states.items():
+            output = self.decode_image(unpack(state).unsqueeze(2))
+            if self.enable_pixel_blend:
+                output = mask * output + (1.0 - mask) * raw_source
+            outputs[name] = output
 
-        if self.enable_pixel_blend:
-            output = mask * output + (1.0 - mask) * raw_source
-
-        return {"mask": mask, "output": output}
+        result = {"mask": mask, "output": outputs[selected]}
+        if velocity_trace is not None:
+            for path in velocity_trace.save(outputs=outputs):
+                logger.info(f"Poisson trajectory comparison saved to {path}")
+            result.update(output_poisson_off=outputs["off"], output_poisson_on=outputs["on"])
+        return result
 
     @torch.inference_mode()
     def generate(

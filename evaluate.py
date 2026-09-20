@@ -1,6 +1,7 @@
 import os
 import random
 from collections import Counter
+from functools import partial
 from pathlib import Path
 
 import hydra
@@ -20,9 +21,12 @@ from data_module.dataloader import get_dataloader
 from data_module.sample_utils import image_name as sample_image_name
 from pipelines.base_pipeline import BasePipeline
 from trainer.lora_utils import merge_lora
+from trainer.parallel.fsdp_strategy import FSDPStrategy
+from trainer.parallel.handler import parallel_handler
 
 
 def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig | None) -> None:
+    """Queue CPU LoRA fusion before pretrained weights are placed on devices."""
     if adapter_cfgs is None:
         return
     for adapter_type, path_and_cfg in adapter_cfgs.items():
@@ -32,20 +36,25 @@ def load_lora_adapters(pipe: BasePipeline, adapter_cfgs: DictConfig | None) -> N
             continue
         if not path:
             raise ValueError(f"adapters.{adapter_type}.path must point to a trained LoRA checkpoint.")
-        logger.info(f"Load adapter {adapter_type} from {path}.")
-        merge_lora(pipe.transformer, path, cfg.adapter_name, lora_scale=path_and_cfg.lora_scale)
-    logger.info("All adapters have been loaded into the model.")
+        logger.info(f"Queue adapter {adapter_type} from {path}.")
+        pipe.configure_model(
+            pipe.transformer,
+            partial(merge_lora, lora_path=path, adapter_name=cfg.adapter_name, lora_scale=path_and_cfg.lora_scale),
+            update_structure=False,
+        )
 
 
 @hydra.main(config_path="configs", config_name="eval_qwenimage_maskflow", version_base="v1.2")
-def evaluate(cfgs: DictConfig):
+def evaluate(cfgs: DictConfig) -> None:
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     rank = int(os.environ.get("RANK", 0))
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
-    if world_size > 1:
+    if FSDPStrategy.is_full_shard(cfgs.get("fsdp_strategy", "no_shard")):
+        parallel_handler.setup_parallel()
+    elif world_size > 1:
         dist.init_process_group("nccl")
     try:
         # Hydra's timestamp can resolve differently in separate workers.
@@ -59,7 +68,9 @@ def evaluate(cfgs: DictConfig):
 
 
 @torch.inference_mode()
-def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size: int, evaluate_dir: Path):
+def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size: int, evaluate_dir: Path) -> None:
+    """Evaluate disjoint samples per replica, or shared batches across FSDP ranks."""
+    full_shard = FSDPStrategy.is_full_shard(cfgs.get("fsdp_strategy", "no_shard"))
     cfg_contents = "\n" + " Configs ".center(50, "=")
     cfg_contents += "\n" + OmegaConf.to_yaml(cfgs)
     cfg_contents += "\n" + "=" * 50
@@ -95,8 +106,9 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
     if duplicates:
         raise ValueError(f"Evaluation output names must be unique; duplicates: {duplicates[:5]}")
 
-    # No padding or dropping: every sample belongs to exactly one worker.
-    local_evalset = Subset(evalset, range(rank, len(evalset), world_size))
+    # FSDP ranks must execute the same forwards, including variable-size batches.
+    # Replicated evaluation assigns each sample to exactly one worker.
+    local_evalset = evalset if full_shard else Subset(evalset, range(rank, len(evalset), world_size))
     eval_loader, _ = get_dataloader(
         local_evalset,
         batch_size_per_process=cfgs.batch_size_per_process,
@@ -113,10 +125,13 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
         return
 
     # -------- Pipeline and LoRA loading -------- #
-    pipe: BasePipeline = instantiate(cfgs.pipeline, device=device, dtype=weight_dtype)
-    # Ranks without samples already returned; inference loads independently per rank.
-    pipe.load_pretrained_weights()
-    load_lora_adapters(pipe, cfgs.adapters)
+    # FSDP initialization/collectives need ordinary tensors, even during inference.
+    with torch.inference_mode(False):
+        pipe: BasePipeline = instantiate(cfgs.pipeline, device=device, dtype=weight_dtype)
+        load_lora_adapters(pipe, cfgs.adapters)
+        if full_shard:
+            pipe.setup_fsdp_modules(FSDPStrategy.FULL_SHARD, device, weight_dtype)
+        pipe.load_pretrained_weights(broadcast=full_shard)
     pipe.transformer.requires_grad_(False).eval()
     pipe.vae.eval()
     pipe.text_pipeline.text_encoder.eval()
@@ -141,6 +156,8 @@ def run_evaluation(cfgs: DictConfig, device: torch.device, rank: int, world_size
             seed=cfgs.eval_seed,
             **cfg_kwargs,
         )
+        if full_shard and rank != 0:
+            continue
         for i, image_name in enumerate(batch["image_name"]):
             pred_path = prediction_dir / f"{image_name}.png"
             mask_path = mask_dir / f"{image_name}.png"

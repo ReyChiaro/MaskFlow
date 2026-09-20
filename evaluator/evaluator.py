@@ -36,12 +36,13 @@ class Evaluator:
         **kwargs,
     ) -> dict[str, float]:
         metrics = self.metrics
+        originals = kwargs.get("originals")
         target_free = targets is None
         if target_free:
-            targets = kwargs.pop("originals", None)
+            targets = originals
             if self.requested_metrics is None:
                 metrics = {name: metrics[name] for name in ("CLIP-TEXT", "PSNR", "SSIM", "DISTS")}
-        needs_reference = any(not name.startswith("CLIP-TEXT") for name in metrics)
+        needs_reference = any(not name.startswith("CLIP-TEXT") and name not in {"SEAM", "SEAM_GRAD"} for name in metrics)
         if needs_reference:
             if targets is None:
                 raise ValueError("Target-free metrics require originals (source images).")
@@ -60,9 +61,14 @@ class Evaluator:
                 if self.requested_metrics is not None or target_free:
                     raise ValueError("CLIP-TEXT requires prompts.")
                 continue
-            if metric_name.endswith(("-FG", "-BG", "-CROP")) and not has_mask:
+            if (metric_name.endswith(("-FG", "-BG", "-CROP")) or metric_name in {"SEAM", "SEAM_GRAD"}) and not has_mask:
                 logger.info(f"Skip {metric_name}: mask is not provided.")
                 continue
+            if metric_name == "SEAM" and originals is None:
+                if self.requested_metrics is None:
+                    logger.info("Skip SEAM: originals are not provided.")
+                    continue
+                raise ValueError("SEAM requires originals (source images), even when targets are provided.")
             logger.info(f"Evaluate {metric_name}")
             result: float = metric_fn(sources, targets, **kwargs)
             logger.info(f"🎉 {metric_name}: {result} 🎉")

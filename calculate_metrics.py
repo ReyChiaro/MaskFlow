@@ -27,6 +27,7 @@ from data_module.utils import (
     resize_image,
 )
 from evaluator.register import get_metrics, initialize_metrics
+from evaluator.metrics.seam import BOUNDARY_METRICS, boundary_mask, validate_dilation_size
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 DEFAULT_METRICS = ["CLIP-TEXT", "PSNR", "SSIM", "DISTS"]
@@ -195,6 +196,7 @@ class MetricStep:
     function: object
     needs_reference: bool
     region: str = "whole"
+    reference: str | None = None
 
 
 class EvaluationData:
@@ -334,9 +336,9 @@ class EvaluationData:
         self.paths[role], self.errors[role] = paths, errors
         return errors
 
-    def views(self, needs_reference, blend, region):
+    def views(self, needs_reference, blend, region, reference=None):
         # Text-image CLIP alone does not require a reference or its dimensions.
-        grid = self.reference if needs_reference else "source" if blend else None
+        grid = (reference or self.reference) if needs_reference else "source" if blend else None
         cache_key = grid, blend, region
         if cache_key in self._views:
             return self._views[cache_key]
@@ -376,6 +378,7 @@ def build_pipeline(
     clip_batch_size,
     preprocess,
     divisible_by,
+    dilation_size=3,
 ):
     pipeline, skipped = [], {}
     common = []
@@ -407,16 +410,25 @@ def build_pipeline(
         base = requested.removesuffix(suffix) if suffix else requested
         # Explicit CROP names can be mixed with whole-image metrics in one run.
         metric_region = "crop" if suffix == "-CROP" and region == "whole" else region
-        name = base + REGION_SUFFIX.get(metric_region, "")
+        is_boundary = base in BOUNDARY_METRICS
+        if is_boundary:
+            metric_region = "boundary"
+        name = base if is_boundary else base + REGION_SUFFIX.get(metric_region, "")
         reasons = list(common)
+        if is_boundary:
+            try:
+                validate_dilation_size(dilation_size)
+            except ValueError as error:
+                reasons.append(str(error))
         if requested != base and requested != name:
             reasons.append(f"{requested} conflicts with region={region}")
         if name not in registry:
             reasons.append(f"metric/region is not registered: {name}; available: {', '.join(sorted(registry))}")
-        needs_reference = base != "CLIP-TEXT"
+        needs_reference = base not in {"CLIP-TEXT", "SEAM_GRAD"}
+        metric_reference = "source" if base == "SEAM" else data.reference if needs_reference else None
         if needs_reference:
-            reasons.extend(f"{data.reference} reference: {error}" for error in data.require(data.reference))
-        else:
+            reasons.extend(f"{metric_reference} reference: {error}" for error in data.require(metric_reference))
+        elif base == "CLIP-TEXT":
             reasons.extend(data.prompt_errors)
             if not clip_model_id or Path(clip_model_id).is_absolute() and not Path(clip_model_id).is_dir():
                 reasons.append(f"CLIP model directory is missing/invalid: {clip_model_id}")
@@ -429,9 +441,13 @@ def build_pipeline(
         if not reasons and metric_region != "whole":
             # Empty regions do not have a meaningful per-image preservation score.
             try:
-                _, _, masks = data.views(needs_reference, enable_pixel_blend, metric_region)
+                _, _, masks = data.views(needs_reference, enable_pixel_blend, metric_region, metric_reference)
                 for index in range(len(masks)):
-                    selected = masks[index] > 0 if metric_region in ("foreground", "crop") else masks[index] <= 0
+                    aligned_mask = masks[index]
+                    if is_boundary:
+                        boundary_mask(aligned_mask.unsqueeze(0), aligned_mask.unsqueeze(0), dilation_size)
+                        continue
+                    selected = aligned_mask > 0 if metric_region in ("foreground", "crop") else aligned_mask <= 0
                     if not selected.any():
                         reasons.append(f"row {index + 1}: empty {metric_region} after mask alignment")
             except (ValueError, OSError, RuntimeError) as error:
@@ -440,7 +456,7 @@ def build_pipeline(
             skipped[requested] = describe_errors(reasons)
             logger.warning(f"Skip {requested}: {skipped[requested]}")
         elif not any(step.name == name for step in pipeline):
-            pipeline.append(MetricStep(name, registry[name], needs_reference, metric_region))
+            pipeline.append(MetricStep(name, registry[name], needs_reference, metric_region, metric_reference))
     return pipeline, skipped
 
 
@@ -504,6 +520,7 @@ def calculate_metrics(
     data_root=None,
     subsets=None,
     split=None,
+    dilation_size=3,
 ):
     """Validate -> select metric steps -> execute -> report. Legacy folder arguments still work."""
     if reference not in {"auto", "source", "target"}:
@@ -571,6 +588,7 @@ def calculate_metrics(
         clip_batch_size,
         preprocess,
         divisible_by,
+        dilation_size,
     )
     result = {
         "num_images": len(rows),
@@ -579,6 +597,9 @@ def calculate_metrics(
         "enable_pixel_blend": enable_pixel_blend,
         "preprocess": preprocess,
         "divisible_by": divisible_by,
+        "dilation_size": dilation_size,
+        "boundary_definition": "dilate(mask > 0) - erode(mask > 0); square kernel; replicated padding",
+        "seam_grad_definition": "per-pixel mean absolute RGB derivative over valid 8-neighbors, divided by neighbor distance; mean over boundary pixels and images",
         "prompt_key": prompt_key,
         "clip_model_id": clip_model_id,
         "clip_score_definition": "mean(max(cosine(image, prompt), 0))",
@@ -593,7 +614,10 @@ def calculate_metrics(
         "target_dir": str(target_dir) if target_dir is not None else None,
         "requested_metrics": list(metrics),
         "pipeline": [step.name for step in pipeline],
-        "metric_references": {step.name: data.reference if step.needs_reference else "prompt" for step in pipeline},
+        "metric_references": {
+            step.name: step.reference if step.needs_reference else None if step.name == "SEAM_GRAD" else "prompt"
+            for step in pipeline
+        },
         "metrics": {},
         "skipped_metrics": skipped,
         "failed_metrics": {},
@@ -602,8 +626,9 @@ def calculate_metrics(
         logger.warning("No requested metrics passed validation; saving an empty report with reasons.")
     for step in pipeline:
         try:
-            predictions, references, masks = data.views(step.needs_reference, enable_pixel_blend, step.region)
-            kwargs = {"prompts": data.prompts, "clip_model_id": clip_model_id, "clip_batch_size": clip_batch_size}
+            predictions, references, masks = data.views(step.needs_reference, enable_pixel_blend, step.region, step.reference)
+            kwargs = {"prompts": data.prompts, "clip_model_id": clip_model_id, "clip_batch_size": clip_batch_size,
+                      "dilation_size": dilation_size}
             if step.region != "whole":
                 kwargs["mask"] = masks
             logger.info(f"Computing {step.name} on {len(rows)} images")
@@ -668,6 +693,8 @@ def main():
     parser.add_argument("--prompt-key", default="prompt", help="Top-level text field in JSONL or HF metadata")
     parser.add_argument("--preprocess", choices=["mask-edit", "resize"], default="mask-edit")
     parser.add_argument("--divisible-by", type=int, default=32)
+    parser.add_argument("--dilation-size", type=int, default=3,
+                        help="SEAM/SEAM_GRAD square dilation/erosion kernel width, odd >= 3 (default: 3)")
     parser.add_argument("--clip-model-id", default="openai/clip-vit-large-patch14-336")
     parser.add_argument("--clip-batch-size", type=int, default=8)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
