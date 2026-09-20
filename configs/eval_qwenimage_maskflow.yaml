@@ -19,6 +19,7 @@ adapters:
 base_seed: 42
 eval_seed: 42  # Each image starts from this seed.
 weight_dtype: bf16
+fsdp_strategy: no_shard  # full_shard runs shared batches across all GPUs.
 
 # Use 1 for variable-size images: default collation stacks tensors within each batch.
 batch_size_per_process: 1

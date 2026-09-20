@@ -33,6 +33,13 @@ poisson_lambda_s: 1
 poisson_num_iter: 50
 poisson_momentum: 0.1
 
+# Optional complete Poisson OFF/ON trajectories with identical initial noise.
+# Null disables comparison. Enabled: twice the denoising forwards + two final decodes.
+velocity_visualization_dir: null
+velocity_visualization_steps: null  # 1-based snapshots; both trajectories always evolve through every step.
+velocity_visualization_max_samples: 1  # Export cap per batch/rank; both full batches are inferred.
+velocity_visualization_grid: 24  # Maximum arrows along the longest image dimension.
+
 fsdp_configs:
   transformer.transformer_blocks:
     iterable: true

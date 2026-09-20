@@ -30,8 +30,7 @@ script/
 viewer/
 checkpoints/
 evaluator/docs/
-tests/*
-!tests/test_fsdp_loading.py
+tests/
 assets/test/
 tools/
 .env

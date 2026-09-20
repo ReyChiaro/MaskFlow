@@ -207,6 +207,20 @@ samples; results share one `predictions/` directory, with `mask/` for MaskFlow.
 `NPROC_PER_NODE` sets the number of visible GPUs to use; `CUDA_VISIBLE_DEVICES`
 selects them. Training supports the existing `no_shard` and `full_shard` strategies.
 
+For sharded evaluation, reuse the same settings and checkpoint with:
+
+```bash
+NPROC_PER_NODE=8 bash scripts/eval/flux2_maskflow_fsdp.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev \
+  adapters.sft.path=/path/to/checkpoint/lora_adapter/pytorch_lora_weights.safetensors
+```
+
+This selects `fsdp_strategy=full_shard` and reuses the pipeline's `fsdp_configs`.
+Transformer and text encoder are sharded before loading; LoRA fusion runs on
+rank 0 CPU before weights are broadcast into the shards. The VAE stays replicated.
+All GPUs process the same batch, with only rank 0 saving predictions and masks.
+`batch_size_per_process` is therefore the shared batch size in this mode.
+
 Settings live in `configs/pipeline/flux2*.yaml`, `configs/adapter/flux2_lora.yaml`,
 and `configs/{sft,eval}_flux2*.yaml`. All scripts accept Hydra overrides, including
 `trainset.data_file`, `evalset.data_file`, and their corresponding `image_root`.
@@ -296,7 +310,7 @@ Use `--region foreground --reference target` to evaluate the edit region, or
 `--region background --reference source` to evaluate background preservation.
 Regional metrics use the embedded dataset masks by default. To use saved inference
 masks, add `--mask-dir /path/to/run/mask`; these must use the same filename stems
-as the predictions. Whole-image metrics do not require masks. All image roles are
+as the predictions. Whole-image metrics other than the boundary metrics below do not require masks. All image roles are
 read lazily from Parquet, and the existing `--preprocess mask-edit`/`resize` paths
 are applied once, without extracting images to disk.
 
@@ -321,6 +335,52 @@ apply to very small boxes. Empty masks are reported instead of falling back to
 whole-image scores. FID aggregates the full set of crops; CLIP-TEXT uses the
 corresponding prompts and needs no reference image. The Python API is
 `Evaluator(["PSNR-CROP"]).compute(predictions, targets, mask=masks)`.
+
+Boundary fusion metrics are available as `SEAM` and `SEAM_GRAD`:
+
+```bash
+.venv/bin/python calculate_metrics.py \
+  --data-root dataset/MaskEdit-10k --subsets scene \
+  --pred-dir /path/to/run/predictions \
+  --metrics SEAM SEAM_GRAD --dilation-size 3 \
+  --device cuda --output /path/to/run/metrics_boundary.json
+```
+
+Both first binarize the mask using `mask > 0`, then select the two-sided boundary
+`dilate(mask) - erode(mask)`. `--dilation-size` is the square kernel's width in
+pixels on the aligned evaluation grid (default 3, odd integer >= 3), not its
+radius. Replicated padding avoids treating the image frame as an artificial
+boundary. Empty/full masks have no interface and are reported in `skipped_metrics`
+rather than assigned a perfect score. As with other validation failures, one
+invalid sample skips that metric for the run; direct Python calls raise an error.
+
+- `SEAM`: mean squared RGB error between the prediction and **original source**,
+  normalized by the number of boundary pixels and channels. It always uses source
+  images regardless of `--reference`; desired edited targets are not used.
+- `SEAM_GRAD`: mean absolute directional derivative of the prediction in all
+  eight neighboring directions (horizontal, vertical and diagonal). Each
+  difference is divided by pixel distance (1 or sqrt(2)). For each boundary pixel,
+  average over RGB and valid in-frame neighbors, then average over boundary
+  pixels. Differences are computed on the full prediction before selecting the
+  boundary, so masking introduces no artificial gradient. This metric needs no
+  source, target or text unless `--enable-pixel-blend` is requested.
+
+Images are RGB in [0, 1]; both scores are averaged equally across images. Lower
+SEAM means better original-boundary preservation; lower SEAM_GRAD means smoother
+boundaries, although legitimate edges and textures also increase it. These
+metrics retain their boundary definition when mixed with `--region foreground`,
+`background`, or `crop`; they do not have `-FG`, `-BG` or `-CROP` variants.
+`--enable-pixel-blend` evaluates the blended prediction for both, as for other
+metrics. Reports include `dilation_size`, metric definitions and per-metric
+references (`source` for SEAM, null for SEAM_GRAD).
+
+The Python API keeps originals separate from edited targets:
+
+```python
+scores = Evaluator(["SEAM", "SEAM_GRAD"]).compute(
+    predictions, originals=source_images, mask=masks, dilation_size=3,
+)
+```
 
 The JSONL interface remains available via `--data-file` and `--image-root`.
 `--data-root` cannot be combined with either; `--subsets` and `--split` apply only
@@ -659,12 +719,12 @@ head in the sharding policy.
 DMD student/fake/teacher models use this same loader. DMD parameter lists and NFT
 actor/old/reference snapshots are collected only after materialization. Existing
 training checkpoints restore after this initialization, before training resumes.
-The VAE remains replicated. `no_shard` and standalone inference use the same
+The VAE remains replicated. `no_shard` evaluation and standalone inference use the same
 construction/loading lifecycle but retain full parameters per device; inference
 workers load independently, so workers with no samples need no collective calls.
 
 Direct Python pipeline construction now returns unloaded models. Call
-`pipe.load_pretrained_weights()` before inference; training calls it with
+`pipe.load_pretrained_weights()` before inference; training and sharded evaluation call it with
 `broadcast=True` after `setup_fsdp_modules`. The built-in training, evaluation and
 inference entry points already follow this ordering. Adding another native
 Diffusers pipeline uses its component metadata and the same loader, without
