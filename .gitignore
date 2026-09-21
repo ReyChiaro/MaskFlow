@@ -33,8 +33,9 @@ evaluator/docs/
 tests/
 assets/test/
 tools/
-.env
+results/
 
+.env
 launch_*.sh
 *.log
 *.typ
