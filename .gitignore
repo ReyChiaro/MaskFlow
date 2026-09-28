@@ -42,3 +42,16 @@ launch_*.sh
 *.tar
 *.tar.gz
 *.safetensors
+
+# Local research and evaluation files excluded from publication
+/assets/test/
+/assests/test/
+/evaluator/
+/models/
+/scripts/
+/tests/
+/tmp/
+/calculate_metrics.py
+/evaluate.py
+/launch_*.sh
+/profile_evaluate.py
