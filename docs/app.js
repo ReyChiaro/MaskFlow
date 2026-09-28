@@ -51,13 +51,107 @@
               <h3>${item.title}</h3>
             </div>
             <div class="image-frame">
-              <img src="${item.image}" alt="${item.alt}" loading="lazy" />
+              <img src="${item.image}" alt="${item.alt}" width="${item.width}" height="${item.height}" loading="lazy" />
               <button class="zoom-button" type="button" aria-label="Enlarge ${item.figure}">View full size</button>
             </div>
             <figcaption class="figure-caption"><strong>${item.figure}.</strong> ${item.caption}</figcaption>
           </figure>`,
       )
       .join("");
+  }
+
+  function setupCarousel() {
+    const root = $("[data-carousel]");
+    const items = config.galleryFigures;
+    const viewport = $(".carousel-viewport", root);
+    const track = $(".carousel-track", root);
+    const status = $(".carousel-status", root);
+    const dots = $(".carousel-dots", root);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let position = 1;
+    let busy = false;
+    let resetTimer;
+    const slides = [items.at(-1), ...items, items[0]];
+    track.innerHTML = slides.map((item, i) => `
+      <figure class="carousel-slide" data-zoomable role="group" aria-roledescription="slide" aria-label="${item.title}">
+        <h3>${item.title}</h3>
+        <div class="carousel-image"><img src="${item.image}" width="${item.width}" height="${item.height}" alt="${item.alt}" loading="lazy" draggable="false" />
+        <button class="zoom-button" type="button" aria-label="Enlarge ${item.title}">View full size</button></div>
+      </figure>`).join("");
+    dots.innerHTML = items.map((item, i) => `<button type="button" aria-label="Show ${item.title}" data-slide="${i}"></button>`).join("");
+    function paint(animate = false) {
+      track.style.transition = animate && !reduced.matches ? "transform 360ms ease" : "none";
+      track.style.transform = `translateX(-${position * 100}%)`;
+      const active = (position - 1 + items.length) % items.length;
+      status.textContent = `${String(active + 1).padStart(2, "0")} / 08 — ${items[active].title}`;
+      $$("[data-slide]", dots).forEach((dot, i) => dot.setAttribute("aria-current", String(i === active)));
+      [...track.children].forEach((slide, i) => {
+        slide.inert = i !== position;
+        slide.setAttribute("aria-hidden", String(i !== position));
+      });
+    }
+    function settle() {
+      clearTimeout(resetTimer);
+      if (position === 0) position = items.length;
+      if (position === items.length + 1) position = 1;
+      paint();
+      busy = false;
+    }
+    function move(next) {
+      if (busy) return;
+      busy = true;
+      position = next;
+      paint(true);
+      resetTimer = setTimeout(settle, reduced.matches ? 0 : 400);
+    }
+    track.addEventListener("transitionend", (event) => {
+      if (event.target === track && event.propertyName === "transform") settle();
+    });
+    $(".carousel-prev", root).addEventListener("click", () => move(position - 1));
+    $(".carousel-next", root).addEventListener("click", () => move(position + 1));
+    dots.addEventListener("click", (event) => {
+      const dot = event.target.closest("[data-slide]");
+      if (dot) move(Number(dot.dataset.slide) + 1);
+    });
+    viewport.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      move(position + (event.key === "ArrowRight" ? 1 : -1));
+    });
+    let gesture = null;
+    viewport.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest("button") || busy) return;
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      viewport.setPointerCapture(event.pointerId);
+      viewport.classList.add("dragging");
+    });
+    function release(event) {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      gesture = null;
+      viewport.classList.remove("dragging");
+      if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+      if (event.type === "pointerup" && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) move(position + (dx < 0 ? 1 : -1));
+    }
+    viewport.addEventListener("pointerup", release);
+    viewport.addEventListener("pointercancel", release);
+    let wheelAmount = 0;
+    let wheelTimer;
+    viewport.addEventListener("wheel", (event) => {
+      const dx = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
+      if (!dx || (!event.shiftKey && Math.abs(dx) <= Math.abs(event.deltaY))) return;
+      event.preventDefault();
+      clearTimeout(wheelTimer);
+      wheelTimer = setTimeout(() => { wheelAmount = 0; }, 150);
+      if (busy) return;
+      wheelAmount += dx;
+      if (Math.abs(wheelAmount) > 45) {
+        move(position + (wheelAmount > 0 ? 1 : -1));
+        wheelAmount = 0;
+      }
+    }, { passive: false });
+    paint();
   }
 
   function renderCitation() {
@@ -116,15 +210,20 @@
 
   function setupLightbox() {
     const dialog = $("[data-lightbox]");
-    const dialogImage = $("[data-lightbox-image]");
+    const dialogImages = $("[data-lightbox-images]");
     const dialogCaption = $("[data-lightbox-caption]");
     const close = $("[data-lightbox-close]");
 
     function openLightbox(figure) {
-      const image = $("img", figure);
+      const images = $$("img", figure);
+      const image = images[0];
       const caption = $("figcaption", figure);
-      dialogImage.src = image.currentSrc || image.src;
-      dialogImage.alt = image.alt;
+      dialogImages.replaceChildren(...images.map((source) => {
+        const enlarged = document.createElement("img");
+        enlarged.src = source.currentSrc || source.src;
+        enlarged.alt = source.alt;
+        return enlarged;
+      }));
       dialogCaption.textContent = caption?.textContent.trim() || image.alt;
       dialog.showModal();
       document.body.classList.add("lightbox-open");
@@ -165,6 +264,7 @@
   renderCitation();
   setupNavigation();
   setupReveal();
+  setupCarousel();
   setupLightbox();
   setupCitationCopy();
   $("[data-year]").textContent = new Date().getFullYear();

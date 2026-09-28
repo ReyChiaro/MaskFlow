@@ -321,3 +321,45 @@ tr.ours b { margin-left: 5px; color: var(--pink); font-size: 8px; text-transform
   }
   .hero-enter, .reveal { opacity: 1; transform: none; }
 }
+
+/* Benchmark tables retain all metrics on narrow screens. */
+.quantitative h4 { margin: 30px 0 8px; font-size: 20px; }
+caption { text-align: left; padding: 12px 0; font-size: 16px; }
+tbody th[scope="row"] { background: inherit; font-weight: 400; text-align: left; }
+tr.ours th[scope="row"] { color: var(--purple-dark); font-weight: 700; }
+.table-note { font-size: 15px !important; }
+
+/* Stacked method illustration and looping qualitative comparisons. */
+.method-figure h3 { margin-bottom: 20px; font-size: 21px; text-align: center; }
+.method-stack { display: grid; gap: 26px; }
+.lightbox-images { display: grid; justify-items: center; gap: 24px; }
+.lightbox-images:has(img:nth-child(2)) img { max-height: none; width: min(92vw, 1400px); }
+.comparison-carousel { margin-top: 32px; }
+.carousel-stage { position: relative; padding: 0 52px; }
+.carousel-viewport { overflow: hidden; touch-action: pan-y pinch-zoom; cursor: grab; border: 1px solid var(--line); background: white; }
+.carousel-viewport.dragging { cursor: grabbing; }
+.carousel-track { display: flex; align-items: stretch; will-change: transform; }
+.carousel-slide { flex: 0 0 100%; min-width: 0; margin: 0; padding: 22px 14px 14px; user-select: none; }
+.carousel-slide h3 { text-align: center; font-size: 21px; margin: 0 0 18px; }
+.carousel-image { position: relative; aspect-ratio: 3576 / 2038; display: flex; align-items: center; }
+.carousel-image img { width: 100%; height: 100%; object-fit: contain; }
+.carousel-arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 50%; background: white; color: var(--purple); font-size: 24px; cursor: pointer; }
+.carousel-arrow:hover { background: #f5edf9; border-color: var(--purple); }
+.carousel-prev { left: 0; }
+.carousel-next { right: 0; }
+.carousel-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 52px 0; }
+.carousel-status { margin: 0; font-size: 16px; color: var(--muted); }
+.carousel-dots { display: flex; gap: 4px; }
+.carousel-dots button { width: 24px; height: 28px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.carousel-dots button::after { content: ""; display: block; margin: auto; width: 7px; height: 7px; border-radius: 50%; background: #d3c5de; }
+.carousel-dots button[aria-current="true"]::after { background: var(--purple); transform: scale(1.35); }
+.carousel-arrow:focus-visible, .carousel-dots button:focus-visible, .carousel-viewport:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; }
+@media (max-width: 720px) {
+  .carousel-stage { padding: 0 30px; }
+  .carousel-arrow { width: 27px; height: 36px; border-radius: 5px; font-size: 19px; }
+  .carousel-slide { padding: 16px 5px 8px; }
+  .carousel-slide h3 { font-size: 17px; margin-bottom: 12px; }
+  .carousel-footer { padding: 14px 0 0; flex-direction: column; gap: 6px; }
+  .carousel-image .zoom-button { top: auto; bottom: 0; right: 2px; font-size: 9px; padding: 3px 5px; }
+  .method-stack { gap: 16px; }
+}
