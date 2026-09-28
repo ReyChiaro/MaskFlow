@@ -1,28 +1,28 @@
 import json
 
 import torch
+from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
+from diffusers.loaders.peft import PeftAdapterMixin
 from loguru import logger
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict
 from safetensors.torch import save_file
-
-from diffusers.loaders.lora_base import LORA_ADAPTER_METADATA_KEY, LORA_WEIGHT_NAME_SAFE
-from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
 
 
 def add_trainable_lora(
     transformer: torch.nn.Module,
     cfgs: OmegaConf,
-    device: torch.device,
     dtype: torch.dtype,
 ) -> list[torch.nn.Parameter]:
+    """Insert adapters on the model's current device (meta during construction)."""
     lora_config = LoraConfig(
         r=cfgs.r,
         lora_alpha=cfgs.lora_alpha,
         lora_dropout=cfgs.lora_dropout,
         bias="none",
-        target_modules=list(cfgs.target_modules),
+        target_modules=cfgs.target_modules if isinstance(cfgs.target_modules, str) else list(cfgs.target_modules),
     )
 
     transformer.requires_grad_(False)
@@ -32,9 +32,9 @@ def add_trainable_lora(
     params = []
     for name, param in transformer.named_parameters():
         if cfgs.adapter_name in name and "lora_" in name:
-            param.data = param.to(device=device, dtype=dtype).data
+            param.data = param.to(dtype=dtype).data
             if param.grad is not None:
-                param.grad = param.grad.to(device=device, dtype=dtype)
+                param.grad = param.grad.to(dtype=dtype)
             param.requires_grad_(True)
             params.append(param)
 
@@ -43,15 +43,14 @@ def add_trainable_lora(
 
 
 def merge_lora(
-    transformer: torch.nn.Module,
+    transformer: PeftAdapterMixin,
     lora_path: str,
     adapter_name: str,
     lora_scale: float = 1.0,
     weight_name: str | None = None,
-):
-    load_kwargs = {"adapter_name": adapter_name, "prefix": None}
-    if weight_name:
-        load_kwargs["weight_name"] = weight_name
+) -> None:
+    """Merge lora weights into the model."""
+    load_kwargs = {"adapter_name": adapter_name, "prefix": None, "weight_name": weight_name}
     transformer.load_lora_adapter(lora_path, **load_kwargs)
     transformer.set_adapter(adapter_name)
     transformer.fuse_lora(
@@ -60,10 +59,14 @@ def merge_lora(
         adapter_names=[adapter_name],
     )
     transformer.unload_lora()
-    logger.info(f"Merged LoRA '{lora_path}' into transformer.")
+    logger.info(f"Merged LoRA '{lora_path}' into transformer with scale {lora_scale}.")
 
 
-def load_inference_loras(transformer: torch.nn.Module, checkpoint_cfgs: OmegaConf):
+def load_inference_loras(
+    transformer: PeftAdapterMixin,
+    checkpoint_cfgs: DictConfig,
+    lora_scale: float = 1.0,
+) -> None:
     """Apply the SFT LoRA and, when requested, activate its DMD residual LoRA."""
     sft_path = checkpoint_cfgs.get("sft_path")
     dmd_path = checkpoint_cfgs.get("dmd_path")
@@ -75,8 +78,9 @@ def load_inference_loras(transformer: torch.nn.Module, checkpoint_cfgs: OmegaCon
         merge_lora(
             transformer,
             sft_path,
-            checkpoint_cfgs.get("sft_adapter_name", "maskflow"),
-            weight_name=checkpoint_cfgs.get("sft_weight_name"),
+            checkpoint_cfgs.sft_adapter_name,
+            lora_scale=lora_scale,
+            weight_name=checkpoint_cfgs.sft_weight_name,
         )
 
     if dmd_path:

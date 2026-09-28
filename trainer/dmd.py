@@ -1,22 +1,22 @@
+from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
+from typing import Literal
+
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as DCP
 import torch.nn.functional as F
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
-
 from diffusers.optimization import get_scheduler
 from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import OmegaConf
 from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
     get_model_state_dict,
     get_optimizer_state_dict,
     set_model_state_dict,
     set_optimizer_state_dict,
-    StateDictOptions,
 )
 
 from trainer.base_trainer import BaseTrainer
@@ -63,79 +63,53 @@ class DMDTrainer(BaseTrainer):
     student_adapter_state_dict_dir: str = "student_lora"
     fake_adapter_state_dict_dir: str = "fake_lora"
 
-    def _init_pipeline(self):
+    def _init_pipeline(self) -> None:
         # Base pipeline owns the shared VAE/text encoder and the Student DiT.
         super()._init_pipeline()
         self.pipe.cfg_type = self.teacher_cfg_type
 
-    def _prepare_role_transformer(self, trainable: bool):
-        transformer = self.pipe.load_transformer()
+    def _configure_role(self, transformer: torch.nn.Module, *, trainable: bool) -> None:
+        """Defer SFT fusion to CPU loading and insert trainable adapters on meta."""
         if self.sft_lora_path:
-            merge_lora(
+            self.pipe.configure_model(
                 transformer,
-                self.sft_lora_path,
-                self.sft_adapter_name,
-                self.sft_lora_scale,
+                partial(
+                    merge_lora,
+                    lora_path=self.sft_lora_path,
+                    adapter_name=self.sft_adapter_name,
+                    lora_scale=self.sft_lora_scale,
+                ),
+                update_structure=False,
             )
         if trainable:
-            params = add_trainable_lora(transformer, self.lora_configs, self.device, self._train_dtype)
-        else:
-            transformer.requires_grad_(False)
-            params = []
-
-        # Shard each extra DiT immediately after it is constructed so three full
-        # unsharded DiTs do not have to coexist on every rank.
-        if FSDPStrategy.is_full_shard(self.fsdp_strategy):
-            self.pipe.setup_additional_transformer(
-                transformer,
-                FSDPStrategy.FULL_SHARD,
-                self.device,
-                self._train_dtype,
+            self.pipe.configure_model(
+                transformer, partial(add_trainable_lora, cfgs=self.lora_configs, dtype=self._train_dtype)
             )
-        return transformer, params
 
-    def _init_trainable(self):
-        if self.sft_lora_path:
-            merge_lora(
-                self.pipe.transformer,
-                self.sft_lora_path,
-                self.sft_adapter_name,
-                self.sft_lora_scale,
-            )
-        self.student_params = add_trainable_lora(
-            self.pipe.transformer,
-            self.lora_configs,
-            self.device,
-            self._train_dtype,
-        )
-
-        self.fake_transformer, self.fake_params = self._prepare_role_transformer(trainable=True)
-        self.teacher_transformer, _ = self._prepare_role_transformer(trainable=False)
+    def _init_trainable(self) -> None:
+        """Construct all roles without allocating pretrained parameter storage."""
+        self.fake_transformer = self.pipe.create_transformer()
+        self.teacher_transformer = self.pipe.create_transformer()
+        self._configure_role(self.pipe.transformer, trainable=True)
+        self._configure_role(self.fake_transformer, trainable=True)
+        self._configure_role(self.teacher_transformer, trainable=False)
         self.teacher_transformer.eval()
 
-    def _init_parallel_modules(self):
-        self.pipe.setup_fsdp_modules(self.fsdp_strategy, self.device, self._train_dtype)
-        if FSDPStrategy.is_no_shard(self.fsdp_strategy):
+    def _init_parallel_modules(self) -> None:
+        super()._init_parallel_modules()
+        for transformer in (self.fake_transformer, self.teacher_transformer):
             self.pipe.setup_additional_transformer(
-                self.fake_transformer,
-                self.fsdp_strategy,
-                self.device,
-                self._train_dtype,
+                transformer, self.fsdp_strategy, self.device, self._train_dtype
             )
-            self.pipe.setup_additional_transformer(
-                self.teacher_transformer,
-                self.fsdp_strategy,
-                self.device,
-                self._train_dtype,
-            )
-
         self.pipe.fsdp_modules.extend([self.fake_transformer, self.teacher_transformer])
         if self.enable_gradient_checkpoint:
-            self.unwrap_model(self.pipe.transformer).enable_gradient_checkpointing()
-            self.unwrap_model(self.fake_transformer).enable_gradient_checkpointing()
+            self.fake_transformer.enable_gradient_checkpointing()
 
-        self.sync_trainable_parameters()
-        self._sync_parameters(self.fake_params)
+    def _init_model_weights(self) -> None:
+        """Refresh parameter lists after DCP replaces meta parameters with real shards."""
+        super()._init_model_weights()
+        self.student_params = [p for p in self.pipe.transformer.parameters() if p.requires_grad]
+        self.fake_params = [p for p in self.fake_transformer.parameters() if p.requires_grad]
 
     def _init_optimizer(self):
         super()._init_optimizer()
@@ -153,12 +127,6 @@ class DMDTrainer(BaseTrainer):
                 last_epoch=self.lr_scheduler_configs.last_epoch,
             )
         logger.info("Fake optimizer initialized.")
-
-    def _sync_parameters(self, params):
-        if self.world_size <= 1 or not FSDPStrategy.is_no_shard(self.fsdp_strategy):
-            return
-        for param in params:
-            dist.broadcast(param.data, src=0)
 
     def _sync_role_gradients(self, params):
         if self.world_size <= 1 or not FSDPStrategy.is_no_shard(self.fsdp_strategy):
@@ -202,8 +170,7 @@ class DMDTrainer(BaseTrainer):
         text_scale, mask_scale = self._teacher_cfg_scales()
         branches = model_inputs.cfg_branches
         predictions = {
-            name: self._predict_branch(self.teacher_transformer, branch, xt, sigma)
-            for name, branch in branches.items()
+            name: self._predict_branch(self.teacher_transformer, branch, xt, sigma) for name, branch in branches.items()
         }
         return self.pipe.combine_cfg_predictions(
             predictions,
@@ -215,8 +182,7 @@ class DMDTrainer(BaseTrainer):
     def _poisson_enabled(self, sigma: torch.Tensor) -> bool:
         sigma_value = sigma.flatten()[0].item()
         return (
-            self.pipe.enable_poisson_infer
-            and self.pipe.poisson_steps[0] <= sigma_value <= self.pipe.poisson_steps[1]
+            self.pipe.enable_poisson_infer and self.pipe.poisson_steps[0] <= sigma_value <= self.pipe.poisson_steps[1]
         )
 
     def _apply_poisson(self, model_inputs, xt, pred, sigma, d_sigma_dt, noise):
@@ -259,9 +225,7 @@ class DMDTrainer(BaseTrainer):
             next_sigma = next_sigma.to(self.device)
             d_sigma_dt = d_sigma_dt.to(self.device)
 
-            step_requires_grad = requires_grad and (
-                self.student_gradient_mode == "full" or step == end_step
-            )
+            step_requires_grad = requires_grad and (self.student_gradient_mode == "full" or step == end_step)
             if step_requires_grad and self.student_gradient_mode == "last_step":
                 xt = xt.detach()
 
@@ -366,12 +330,8 @@ class DMDTrainer(BaseTrainer):
                 sigma,
             )
             teacher_pred = self._predict_teacher(model_inputs, xt, sigma)
-            fake_x0 = self._project_score_prediction(
-                model_inputs, xt, fake_pred, sigma, d_sigma_dt, score_noise
-            )
-            teacher_x0 = self._project_score_prediction(
-                model_inputs, xt, teacher_pred, sigma, d_sigma_dt, score_noise
-            )
+            fake_x0 = self._project_score_prediction(model_inputs, xt, fake_pred, sigma, d_sigma_dt, score_noise)
+            teacher_x0 = self._project_score_prediction(model_inputs, xt, teacher_pred, sigma, d_sigma_dt, score_noise)
             normalizer = (generated.detach().float() - teacher_x0.float()).abs()
             normalizer = normalizer.reshape(normalizer.shape[0], -1).mean(dim=1)
             normalizer = normalizer.clamp_min(self.dmd_normalizer_min).view(-1, 1, 1)

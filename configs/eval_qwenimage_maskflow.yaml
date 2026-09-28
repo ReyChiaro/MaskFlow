@@ -1,0 +1,36 @@
+defaults:
+  - evalset: mask_edit
+  - pipeline: qwenimage_maskflow
+  - project: evaluation
+  - adapter@sft_adapter: qwenimage_lora
+  # There may be optional distill_adapter
+  # - adapter@distill_adapter: dmd_lora
+  - _self_
+
+adapters:
+  sft:
+    path: null  # The trained weight path
+    cfg: ${sft_adapter}
+    lora_scale: 1.0
+  # distill:
+  #   path: null
+  #   cfg: ${distill_adapter}
+
+base_seed: 42
+eval_seed: 42  # Each image starts from this seed.
+weight_dtype: bf16
+fsdp_strategy: no_shard  # full_shard runs shared batches across all GPUs.
+
+# Use 1 for variable-size images: default collation stacks tensors within each batch.
+batch_size_per_process: 1
+num_workers: 4
+
+text_cfg_scale: 4.0
+mask_cfg_scale: 1.0
+interaction_cfg_scale: null
+num_inference_steps: 50
+eval_with_position_prompt: false
+
+hydra:
+  run:
+    dir: ${project.output_dir}/hydra-configs/rank_${oc.env:RANK,0}

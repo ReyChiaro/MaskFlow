@@ -1,0 +1,41 @@
+defaults:
+  - pipeline: qwenimage_maskflow
+  - _self_
+
+# Aligned RGB source and mask; white mask pixels identify the editable region.
+input:
+  source: null
+  mask: null
+  prompt: ""
+  negative_prompt: ""
+
+checkpoint:
+  path: null
+  adapter_name: maskflow
+  scale: 1.0
+  weight_name: null
+
+preprocessing:
+  max_resolution: 1048576
+
+runtime:
+  fsdp_strategy: no_shard
+  dtype: bfloat16
+  seed: 42
+  batch_size: 1
+  warmup: 2
+  repeats: 5
+  num_inference_steps: 50
+  text_cfg_scale: 4.0
+  mask_cfg_scale: 1.0
+  interaction_cfg_scale: null
+
+output:
+  dir: outputs/profiling/qwenimage_maskflow/${oc.env:PROFILE_TIMESTAMP,${now:%Y%m%d-%H%M%S}}
+  save_image: false
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${output.dir}/hydra/rank_${oc.env:RANK,0}

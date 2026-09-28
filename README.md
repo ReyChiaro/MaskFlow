@@ -35,7 +35,9 @@
 - [Introduction](#introduction)
 - [🪄 \[New\] Editor](#-new-editor)
 - [Quick Start](#quick-start)
+- [FLUX.2-dev](#flux2-dev)
 - [Distribution Matching Distillation](#distribution-matching-distillation)
+- [Diffusion NFT](#diffusion-nft)
 - [Configuration reference](#configuration-reference)
 - [Visualization](#visualization)
 - [License](#license)
@@ -125,6 +127,301 @@ uv run python inference.py \
 
 The base model defaults to [`Qwen/Qwen-Image-Edit-2511`](https://huggingface.co/Qwen/Qwen-Image-Edit-2511), and the output directory is created automatically.
 
+### Text and mask CFG
+
+QwenImage and FLUX.2 MaskFlow support four condition branches. The source image is
+always retained: `pm` keeps prompt and mask, `pn` keeps only the prompt, `nm` keeps
+only the mask, and `nn` supplies neither. Missing text uses an empty string during
+training; inference uses `negative_prompt` when provided. A nonempty negative
+prompt therefore gives a negative-text branch rather than an absent-text branch.
+
+`MaskFlowTrainer` selects one branch per batch. The default training probabilities
+are `pm=0.7, pn=0.1, nm=0.1, nn=0.1`, configured under
+`trainer.cfg_branch_probabilities`. They override the legacy dropout rates. To
+restore text-only dropout, set `trainer.cfg_branch_probabilities=null` and leave
+`trainer.mask_cfg_dropout=0`. The dataset always supplies the original mask.
+For `pn` and `nn`, only model-visible mask conditions are removed; the target,
+noise path, and background constraint still use the original mask. These two
+branches use full-image MSE, while `pm` and `nm` retain the configured masked loss.
+
+At inference, let `t=text_cfg_scale`, `m=mask_cfg_scale`, and
+`k=interaction_cfg_scale`. The velocity combination is:
+
+```text
+v = v_nn + t*(v_pn-v_nn) + m*(v_nm-v_nn) + k*(v_pm-v_pn-v_nm+v_nn)
+```
+
+By default, `interaction_cfg_scale=null` sets `k=t`, giving
+`v_nn + m*(v_nm-v_nn) + t*(v_pm-v_nm)`. With `m=1`, this is the existing text CFG.
+Set an explicit interaction scale to use the general four-branch formula.
+Only branches with nonzero coefficients are evaluated, plus `pm` when needed for
+norm rescaling (`pipeline.rescale_cfg=true`). Scales of zero are supported.
+Poisson refinement and background replacement run once after CFG combination.
+
+For a checkpoint trained with all four branches, add these overrides to inference:
+
+```bash
+runtime.text_cfg_scale=4.0 runtime.mask_cfg_scale=1.5 runtime.interaction_cfg_scale=null
+```
+
+Training-time evaluation and `evaluate.py` use the same parameter names without
+the `runtime` prefix (under `trainer` for training-time evaluation). Existing
+text-only checkpoints should keep `mask_cfg_scale=1` and
+`interaction_cfg_scale=null`; they have not been trained for `pn` or `nn`.
+FLUX.2's native `pipeline.guidance_scale` remains a separate model input.
+This training integration applies to `MaskFlowTrainer`; DMD and NFT are unchanged.
+
+## FLUX.2-dev
+
+FLUX.2-dev uses the existing LoRA and MaskFlow trainers. The base pipeline preserves
+native text encoding, reference-image preprocessing, latent normalization, guidance
+embeddings and inference timesteps. MaskFlow adds mask conditioning, regional flow
+and loss, latent-space Poisson refinement, and optional pixel blending.
+
+Train the base model or MaskFlow with a local Diffusers checkpoint (the pipeline
+config defaults to `black-forest-labs/FLUX.2-dev`):
+
+```bash
+NPROC_PER_NODE=8 bash scripts/sft/flux2.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev
+
+NPROC_PER_NODE=8 bash scripts/sft/flux2_maskflow.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev \
+  trainer.fsdp_strategy=full_shard
+```
+
+Evaluate the base pretrained model, or load a trained MaskFlow LoRA:
+
+```bash
+NPROC_PER_NODE=8 bash scripts/eval/flux2.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev
+
+NPROC_PER_NODE=8 bash scripts/eval/flux2_maskflow.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev \
+  adapters.sft.path=/path/to/checkpoint/lora_adapter/pytorch_lora_weights.safetensors
+```
+
+The base evaluation script also accepts `adapters.sft.path` for SFT evaluation.
+Each evaluation worker loads a complete model and processes a disjoint subset of
+samples; results share one `predictions/` directory, with `mask/` for MaskFlow.
+`NPROC_PER_NODE` sets the number of visible GPUs to use; `CUDA_VISIBLE_DEVICES`
+selects them. Training supports the existing `no_shard` and `full_shard` strategies.
+
+For sharded evaluation, reuse the same settings and checkpoint with:
+
+```bash
+NPROC_PER_NODE=8 bash scripts/eval/flux2_maskflow_fsdp.sh \
+  pipeline.pretrained_model=/path/to/FLUX.2-dev \
+  adapters.sft.path=/path/to/checkpoint/lora_adapter/pytorch_lora_weights.safetensors
+```
+
+This selects `fsdp_strategy=full_shard` and reuses the pipeline's `fsdp_configs`.
+Transformer and text encoder are sharded before loading; LoRA fusion runs on
+rank 0 CPU before weights are broadcast into the shards. The VAE stays replicated.
+All GPUs process the same batch, with only rank 0 saving predictions and masks.
+`batch_size_per_process` is therefore the shared batch size in this mode.
+
+Settings live in `configs/pipeline/flux2*.yaml`, `configs/adapter/flux2_lora.yaml`,
+and `configs/{sft,eval}_flux2*.yaml`. All scripts accept Hydra overrides, including
+`trainset.data_file`, `evalset.data_file`, and their corresponding `image_root`.
+The base pipeline uses `conditions.source`; MaskFlow uses `conditions.source` and
+`conditions.mask`. Batches retain the existing dataset schema. Keep the per-process
+batch size at 1 for images with different spatial sizes.
+
+`pipeline.guidance_scale` controls FLUX.2's native guidance embedding.
+`trainer.text_cfg_scale` (training-time evaluation) and `text_cfg_scale` (standalone
+evaluation) independently control optional two-pass CFG. Base configs set CFG to 1;
+MaskFlow configs enable text dropout and CFG. Match pipeline settings, including
+mask morphology, when evaluating a trained checkpoint.
+
+Inference uses Diffusers' step-count-dependent FLUX.2 time shift. Training uses
+`pipeline.scheduler.weighting_scheme` and `training_shift`; the latter is a positive
+rational sigma-shift factor and is independent of evaluation step count. Model
+architecture dimensions are read from the pretrained configuration.
+
+Run the small-model regression checks without downloading pretrained weights:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
+Validation covers native three-step inference equivalence, non-divisible reference
+sizes, mask layout and boundaries, regional loss, and LoRA update/save/reload/fusion.
+The integration was also exercised with temporary small FLUX.2/Mistral models through
+the actual two-GPU training scripts (`no_shard` and FSDP `full_shard`) and evaluation
+scripts, including three samples split across two workers. Full pretrained
+FLUX.2-dev image quality and memory use have not been validated locally.
+
+## Hugging Face Parquet dataset
+
+`HFMaskEditDataset` reads the downloaded
+[MaskEdit-10k](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k) repository
+directly, including the images embedded in its Parquet files. Set `data_root` to
+the repository directory containing `data/scene`, `data/infographics_en`, and
+`data/infographics_cn`; no image extraction is needed.
+
+Select the Hugging Face dataset configs when training:
+
+```bash
+.venv/bin/python -m torch.distributed.run --standalone --nproc-per-node=1 \
+  finetune.py --config-name sft_maskflow \
+  trainset=hf_mask_edit evalset=hf_mask_edit \
+  trainset.data_root=/path/to/MaskEdit-10k \
+  evalset.data_root=/path/to/MaskEdit-10k \
+  'trainset.subsets=[scene,infographics_en,infographics_cn]' \
+  evalset.subsets=scene
+```
+
+Use `trainset.subsets=scene` for a single subset, or a list for any combination.
+The supported names are exactly `scene`, `infographics_en`, and `infographics_cn`.
+Training defaults to `split: train`; evaluation defaults to `split: test`.
+For standalone evaluation, select `evalset=hf_mask_edit` with the same overrides.
+Model and trainer settings continue to come from the selected training config.
+
+Subsets are concatenated in the supplied order and shards are sorted by filename.
+`load_start` and `load_end` apply to the combined samples with the same behavior
+as `MaskEditDataset`: integer end indices are exclusive; fractional end indices
+include the row at `floor(load_end * sample_count)`, capped at the dataset length.
+Image names, RGB conversion, cropping, resizing, mask interpolation, and prompt
+processing match the JSONL loader. Images are decoded on access, with one Parquet
+row group cached per worker. Keep the per-process batch size at 1 when images
+have different spatial sizes.
+
+Evaluate saved predictions directly against the Parquet test set:
+
+```bash
+.venv/bin/python calculate_metrics.py \
+  --data-root dataset/MaskEdit-10k \
+  --subsets scene infographics_en infographics_cn \
+  --pred-dir /path/to/run/predictions \
+  --reference target --region whole \
+  --metrics PSNR SSIM DISTS LPIPS \
+  --device cuda --output /path/to/run/metrics_all_whole.json
+```
+
+`--subsets scene` selects one subset; multiple names select their combined samples
+in the supplied order. Omitting `--subsets` selects all three. `--split` defaults
+to `test` and also accepts `train`. The report records the selected subsets, split,
+and sample count. Predictions match the target filename stem, as in `evaluate.py`;
+extra predictions outside the selected subsets are ignored, while missing or
+ambiguous matches are reported.
+
+Use `--region foreground --reference target` to evaluate the edit region, or
+`--region background --reference source` to evaluate background preservation.
+Regional metrics use the embedded dataset masks by default. To use saved inference
+masks, add `--mask-dir /path/to/run/mask`; these must use the same filename stems
+as the predictions. Whole-image metrics other than the boundary metrics below do not require masks. All image roles are
+read lazily from Parquet, and the existing `--preprocess mask-edit`/`resize` paths
+are applied once, without extracting images to disk.
+
+For text alignment, include `CLIP-TEXT` in `--metrics`, select the text field with
+`--prompt-key edit_instruction` (or `prompt`), and set `--clip-model-id` to the CLIP
+checkpoint directory. Text fields are used as stored in the dataset. DISTS and
+LPIPS also need their pretrained weights available. Check `skipped_metrics` and
+`failed_metrics` in the JSON report in addition to the successful scores. Regional
+`-FG`/`-BG` metrics retain the existing convention of zeroing pixels outside the region.
+
+Use `--region crop --metrics PSNR SSIM LPIPS CLIP DINO FID` to score foreground
+bounding boxes. Results use the `-CROP` suffix. You can also mix explicit names
+with whole-image metrics, for example `--region whole --metrics PSNR PSNR-CROP`.
+`CLIP-TEXT-CROP`, `MSE-CROP`, `DISTS-CROP` and `VGG-CONTENT-CROP` are supported too.
+
+The first mask channel's positive pixels define one tight, exclusive bounding
+box per pair. Images are aligned to the mask grid, then both use exactly the
+same box, resolution and aspect ratio. All pixels inside the box are retained,
+including holes between disconnected foreground regions. Crops keep their
+native dimensions; each metric's existing minimum input-size requirements still
+apply to very small boxes. Empty masks are reported instead of falling back to
+whole-image scores. FID aggregates the full set of crops; CLIP-TEXT uses the
+corresponding prompts and needs no reference image. The Python API is
+`Evaluator(["PSNR-CROP"]).compute(predictions, targets, mask=masks)`.
+
+Boundary fusion metrics are available as `SEAM` and `SEAM_GRAD`:
+
+```bash
+.venv/bin/python calculate_metrics.py \
+  --data-root dataset/MaskEdit-10k --subsets scene \
+  --pred-dir /path/to/run/predictions \
+  --metrics SEAM SEAM_GRAD --dilation-size 3 \
+  --device cuda --output /path/to/run/metrics_boundary.json
+```
+
+Both first binarize the mask using `mask > 0`, then select the two-sided boundary
+`dilate(mask) - erode(mask)`. `--dilation-size` is the square kernel's width in
+pixels on the aligned evaluation grid (default 3, odd integer >= 3), not its
+radius. Replicated padding avoids treating the image frame as an artificial
+boundary. Empty/full masks have no interface and are reported in `skipped_metrics`
+rather than assigned a perfect score. As with other validation failures, one
+invalid sample skips that metric for the run; direct Python calls raise an error.
+
+- `SEAM`: mean squared RGB error between the prediction and **original source**,
+  normalized by the number of boundary pixels and channels. It always uses source
+  images regardless of `--reference`; desired edited targets are not used.
+- `SEAM_GRAD`: mean absolute directional derivative of the prediction in all
+  eight neighboring directions (horizontal, vertical and diagonal). Each
+  difference is divided by pixel distance (1 or sqrt(2)). For each boundary pixel,
+  average over RGB and valid in-frame neighbors, then average over boundary
+  pixels. Differences are computed on the full prediction before selecting the
+  boundary, so masking introduces no artificial gradient. This metric needs no
+  source, target or text unless `--enable-pixel-blend` is requested.
+
+Images are RGB in [0, 1]; both scores are averaged equally across images. Lower
+SEAM means better original-boundary preservation; lower SEAM_GRAD means smoother
+boundaries, although legitimate edges and textures also increase it. These
+metrics retain their boundary definition when mixed with `--region foreground`,
+`background`, or `crop`; they do not have `-FG`, `-BG` or `-CROP` variants.
+`--enable-pixel-blend` evaluates the blended prediction for both, as for other
+metrics. Reports include `dilation_size`, metric definitions and per-metric
+references (`source` for SEAM, null for SEAM_GRAD).
+
+The Python API keeps originals separate from edited targets:
+
+```python
+scores = Evaluator(["SEAM", "SEAM_GRAD"]).compute(
+    predictions, originals=source_images, mask=masks, dilation_size=3,
+)
+```
+
+The JSONL interface remains available via `--data-file` and `--image-root`.
+`--data-root` cannot be combined with either; `--subsets` and `--split` apply only
+to the Hugging Face input. Use distinct `--output` paths for different subsets or
+regions to keep all reports.
+
+## Extract prompts from Parquet
+
+Export a selected MaskEdit-10k text field to UTF-8 JSONL:
+
+```bash
+python extract_parquet_prompts.py \
+  --parquet-dir dataset/MaskEdit-10k/data \
+  --key prompt --output extracted/prompts.jsonl
+```
+
+Supported keys are `prompt` (default), `edit_instruction`, and `negative_prompt`,
+as defined in the dataset's
+[prepare_dataset.py](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k/blob/main/prepare_dataset.py).
+All Parquet files below the input folder are searched recursively. Use
+`--pattern 'test-*.parquet'` to export only test shards, or point `--parquet-dir`
+at `data/scene` for one subset. Text is read in batches of 1024 rows; change this
+with `--batch-size`. Image bytes are not loaded.
+
+Each output line contains the selected text field, available `id`, `source_id`,
+and `target` filename metadata, plus the relative `parquet_file` and one-based
+`row_number`. Shards are sorted by path and rows preserve their original order.
+Duplicate text and empty strings are retained; embedded newlines are JSON-escaped
+and restored when read with `json.loads`. Missing or null text raises an error.
+Existing output files are never overwritten, and failed runs leave no partial
+JSONL output. The CLI prints the number of exported rows and processed shards.
+
+```python
+from extract_parquet_prompts import extract_parquet_prompts
+
+counts = extract_parquet_prompts(
+    "dataset/MaskEdit-10k/data", "extracted/instructions.jsonl",
+    key="edit_instruction", pattern="test-*.parquet",
+)
+```
+
 ## Distribution Matching Distillation
 
 To improve efficiency for practical deployment, we apply Distribution Matching Distillation (DMD) and provide accelerated 8-step and 16-step variants. The distilled LoRA represents a residual on top of the corresponding standard MaskFlow checkpoint, so both the matching SFT and DMD weights are required during inference. Although the student is distilled with teacher text classifier-free guidance, enabling CFG during student inference generally gives better performance.
@@ -152,6 +449,64 @@ checkpoint.sft_path=/absolute/path/to/maskflow-SEC.safetensors \
 checkpoint.dmd_path=/absolute/path/to/maskflow-SEC-tcfg4-step8.safetensors
 ```
 
+## Diffusion NFT
+
+`trainer/diffusion_nft.py` implements online NFT for **QwenImageMaskFlow with
+LoRA**, using the existing MaskFlow scheduler, conditional encoding and Poisson
+rollout refinement. It does not support the FLUX.2 pipeline or full-parameter
+finetuning. Configure the dataset/model paths, then run:
+
+```bash
+uv run torchrun --standalone --nproc_per_node=8 finetune.py --config-name=train_nft \
+  trainer.sft_lora_path=/absolute/path/to/maskflow.safetensors
+```
+
+Use `trainer.fsdp_strategy=no_shard` for replicated models, or `full_shard` for
+FSDP2. SFT weights are merged before mounting the NFT adapter. Actor, old and
+reference share one frozen backbone; old/reference store detached LoRA factor
+snapshots. FSDP switches discard cached full parameters before copying matching
+shards. Actor weights stay in place from its forward through backward. The
+reference remains at initialization; old is updated once per rollout round by
+`old_decay * old + (1-old_decay) * actor`.
+
+The counters and batch sizes in `configs/trainer/diffusion_nft.yaml` mean:
+
+| Setting / counter | Meaning |
+|---|---|
+| `batch_size_per_process` (`B`) | Distinct editing inputs per rank; incomplete dataset batches are dropped |
+| `group_size` (`K`) | Independently generated images for the same prompt/source/mask; the whole group stays on one rank |
+| `rollout_batches_per_round` (`R`) | Data batches collected with fixed old weights before training |
+| `gradient_accumulation_steps` (`G`) | Endpoint micro-batches per actor optimizer update |
+| `train_timesteps` (`T`) | Grid times per endpoint micro-batch, with fresh noise at each time |
+| `micro_step` | Endpoint micro-batches trained, including inner-epoch reuse |
+| `global_step` | Actor optimizer updates; also controls the LR scheduler and stopping limit |
+| `rollout_step` | Completed rollout/train/old-sync rounds |
+
+A full optimizer update uses `world_size * B * G` endpoints and `G*T` backward
+calls per rank. A full round makes `inner_epochs * ceil(R*K/G)` updates. Smaller
+tail accumulations divide by their actual size. The step limit may end a round
+early and discard unused endpoints. Checkpoints/evaluation are deferred to the
+round boundary when their interval is crossed. Resume preserves old/reference,
+optimizer (when enabled), LR scheduler, consumed data cursor and per-rank training
+RNG; use the same world size and training configuration. Rollout caches are not
+saved. Final NFT adapter export is in `step-N/lora_adapter`; it requires the same
+SFT endpoint at inference if one was merged during training.
+
+Rewards use `models/rewards/rewards.py::RewardModel`: `__call__(images, batch)`
+returns one finite score per image, with larger scores preferred. `Rewards`
+combines configured models by weighted sum without averaging across images.
+`CLIPReward` measures image/text cosine alignment; `DINOv2Reward` measures image
+CLS cosine similarity to a configured source or paired target. Their checkpoint
+paths, inference batch sizes, prompt/reference selection and weights are exposed
+under `configs/reward`. Select `reward=clip_dinov2` for both models. New rewards
+subclass `RewardModel` inside `models/rewards` and are selected by Hydra target.
+
+Group-centered rewards determine the NFT positive/negative reconstruction
+weights. Re-noising uses the MaskFlow scheduler, including its source/mask
+endpoint outside the edit region. The reference penalty is velocity MSE.
+This implementation requires reward scores; it does not assign arbitrary
+directions when rewards are absent.
+
 <details>
 <summary>Configuration reference</summary>
 
@@ -176,6 +531,70 @@ Inference uses [Hydra](https://hydra.cc/), so any field in [`configs/inference.y
 The adapter names are fixed to `maskflow` for SFT and `dmd` for step distillation. If `checkpoint.dmd_path` is provided without `checkpoint.sft_path`, inference stops with an error instead of silently producing an incorrectly initialized result.
 
 </details>
+
+## Extract images from Parquet
+
+Extract a selected image column from downloaded MaskEdit-10k shards:
+
+```bash
+python extract_parquet_images.py \
+  --parquet-dir dataset/MaskEdit-10k/data \
+  --key target --output-dir extracted/target
+```
+
+The image keys are `source`, `mask`, and `target`, as defined in the dataset's
+[prepare_dataset.py](https://huggingface.co/datasets/ReyChiaro/MaskEdit-10k/blob/main/prepare_dataset.py).
+The script recursively searches all `*.parquet` files in the supplied folder.
+Point `--parquet-dir` at `data/scene` to select one subset, or add
+`--pattern 'test-*.parquet'` to select only test shards.
+
+Images are saved to a flat output directory with their original filenames and
+encoded bytes, preserving format, dimensions, and mask mode without recompression.
+Only the selected column is loaded, in batches of 8 rows (`--batch-size` to change).
+Identical existing images are skipped, including repeated sources across samples;
+same-name files with different contents raise an error instead of being replaced.
+On error, earlier outputs remain available for resuming the extraction.
+The printed report counts Parquet files, rows, written images, and skipped images.
+This script requires only `pyarrow` in addition to the Python standard library.
+
+```python
+from extract_parquet_images import extract_parquet_images
+
+counts = extract_parquet_images(
+    "dataset/MaskEdit-10k/data", "extracted/target", "target",
+    pattern="test-*.parquet",
+)
+```
+
+## Per-image PSNR / SSIM ranking
+
+Rank saved predictions against a target directory:
+
+```bash
+python ordered_matrics.py --pred-dir prediction --target-dir target \
+  --sort-by psnr --output ranking.json
+```
+
+Use `--sort-by ssim` to rank by SSIM instead. Both scores are computed for every
+image, and the JSON list is sorted highest first, breaking ties by filename.
+Images match recursively by relative path without the extension; missing targets
+and ambiguous names raise errors, while extra targets are ignored. Images are
+converted to RGB. Dimensions must match unless `--resize` is supplied, which
+resizes predictions to the target dimensions. Each dimension must be at least 6.
+
+The Python API returns the same list with numeric scores:
+
+```python
+from ordered_matrics import ordered_matrics
+
+results = ordered_matrics("prediction", "target", sort_by="ssim")
+image_names = [row["image"] for row in results]
+```
+
+Each entry contains `image`, `prediction`, `target`, `psnr`, and `ssim`.
+Identical images have infinite PSNR, represented as `float("inf")` in Python and
+the string `"inf"` in JSON. The CLI prints JSON and optionally saves it with
+`--output`.
 
 ## Visualization
 
@@ -204,3 +623,99 @@ MaskFlow code and adapter weights are released under the [MIT License](LICENSE).
   url={https://arxiv.org/abs/2608.06929},
 }
 ```
+
+
+### Reproducible single-image and batch inference
+
+`MaskEditDataset`, `HFMaskEditDataset`, and `inference.py` use the same source-based crop and PIL resize: Lanczos for RGB, NEAREST for masks. Dataset `max_resolution` is a pixel area limit (default `1048576`); both dimensions are multiples of `divisible_by` (default `32`). Single-image settings live under `preprocessing`; use the same values as the evaluation dataset. The pipeline's `eval_step` accepts already aligned CPU float32 images `[B, C, H, W]` in `[0, 1]`.
+
+Pass `seed` to `eval_step`: an integer restarts that seed independently for every image; a list supplies one seed per batch item. Identical seed, latent shape, device type and dtype produce identical initial noise regardless of batching, rank or earlier evaluations. This does not fix training noise or timesteps. Matching initial noise alone does not guarantee bitwise identical GPU outputs across batch sizes or different hardware.
+
+- Single image: `runtime.seed=42 checkpoint.lora_scale=1.0` (`lora_scale` scales the loaded SFT adapter).
+- Batch evaluation: `eval_seed=42 adapters.sft.lora_scale=1.0`.
+- Evaluation during training: `trainer.eval_seed=42`.
+
+For comparisons, also match source/mask pixels, prompt, checkpoint, CFG, pixel blend, Poisson and scheduler settings. Inference outputs, evaluation masks, and training evaluation grids are saved as PNG. Earlier batch outputs used a continuously advancing generator and cannot be reproduced by the new per-image seed rule alone.
+
+```bash
+python inference.py \
+  input.source=/path/to/source.png input.mask=/path/to/mask.png \
+  'input.prompt="Replace the object in the masked area in the image 2 with a zebra."' \
+  checkpoint.sft_path=/path/to/pytorch_lora_weights.safetensors \
+  checkpoint.sft_weight_name=null checkpoint.lora_scale=1.0 \
+  runtime.seed=42 pipeline.enable_pixel_blend=false output.path=result.png
+```
+
+### Matched Qwen / FLUX MaskFlow experiments
+
+`launch_bg.sh` runs each `(mask_loss_weight, background_noise_power)` row through
+training and then evaluates its step-1250 LoRA. Select FLUX with:
+
+```bash
+PIPELINE=flux2_maskflow PRETRAINED_MODEL=/root/models/FLUX.2-dev bash launch_bg.sh
+```
+
+The default pipeline is `qwenimage_maskflow`. Both use MaskEdit-10k `scene/train`,
+90% `pm` / 10% `nm` branches, rank-256 LoRA, 1,250 steps, bf16, seed 42, and
+50-step evaluation on `scene/test`. Training-time evaluation is disabled. Set
+`FSDP_STRATEGY=full_shard` when sharding is needed; the default is `no_shard`.
+Standalone FLUX scripts use the same recipe, with mask loss weight and background
+noise power both 1.0; pass Hydra overrides for other values and a trained
+`adapters.sft.path` to the evaluation script.
+
+For FLUX-only FSDP training, use the explicit experiment launcher:
+
+```bash
+NPROC_PER_NODE=8 PRETRAINED_MODEL=/root/models/FLUX.2-dev bash launch_bg_flux_fsdp.sh
+```
+
+Edit its `EXPERIMENTS` list to select mask-loss weights and background-noise powers.
+It uses `trainer.fsdp_strategy=full_shard` and the existing FLUX configuration:
+both transformer block lists and text-encoder language layers are sharded before
+their root modules. The VAE stays replicated. Runs are saved under
+`outputs/experiments/FLUX2dev-MaskFlow-FSDP-r256/`; each row exports its step-1250
+LoRA and proceeds to the next experiment. Evaluation is separate because
+`evaluate.py` loads a complete model on each GPU. Training constructs meta models,
+shards them first, and loads pretrained weights afterwards as described below.
+
+The shared training path is `finetune.py` → `MaskFlowTrainer` → dataset spatial
+alignment → pipeline preprocessing → VAE encoding / Poisson target refinement →
+regional noise and velocity targets → CFG branch selection → transformer → loss,
+backpropagation and LoRA export. Both MaskFlow pipelines sample source, mask and
+target VAE latents during training and use VAE modes during evaluation. The loss
+is full-image MSE plus `mask_loss_weight` times area-normalized foreground MSE;
+branches without a visible mask use full-image MSE only. FLUX retains its native
+latent patchification, normalization, positional IDs, guidance embedding and
+inference schedule.
+
+
+### FSDP2 model initialization
+
+All QwenImage and FLUX pipelines now construct neural components from configuration
+on meta. Training inserts LoRA adapters, applies the existing `fsdp_configs`, then
+loads weights before creating optimizers. There is no eager-loading FSDP path.
+Rank 0 loads one component at a time on CPU; PyTorch DCP broadcasts its weights
+into the existing parameter shards. The CPU source also applies any SFT LoRA
+fusion and initializes new trainable adapters, giving every rank consistent
+parameters. Persistent buffers load from the checkpoint; nonpersistent buffers
+are restored from the CPU model. Qwen's text-encoder root now includes its output
+head in the sharding policy.
+
+DMD student/fake/teacher models use this same loader. DMD parameter lists and NFT
+actor/old/reference snapshots are collected only after materialization. Existing
+training checkpoints restore after this initialization, before training resumes.
+The VAE remains replicated. `no_shard` evaluation and standalone inference use the same
+construction/loading lifecycle but retain full parameters per device; inference
+workers load independently, so workers with no samples need no collective calls.
+
+Direct Python pipeline construction now returns unloaded models. Call
+`pipe.load_pretrained_weights()` before inference; training and sharded evaluation call it with
+`broadcast=True` after `setup_fsdp_modules`. The built-in training, evaluation and
+inference entry points already follow this ordering. Adding another native
+Diffusers pipeline uses its component metadata and the same loader, without
+model-name branches.
+
+Initialization no longer needs a full pretrained transformer/text encoder on any
+GPU. Rank 0 still needs CPU RAM for a full component, and GPU loading temporarily
+holds individual broadcast tensors. Training also needs memory for layer
+all-gathers, activations and the replicated VAE.

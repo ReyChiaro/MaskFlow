@@ -1,0 +1,11 @@
+_target_: models.rewards.rewards.Rewards
+_recursive_: false
+
+models:
+  clip:
+    weight: 1.0
+    model:
+      _target_: models.rewards.clip.CLIPReward
+      pretrained_model: openai/clip-vit-large-patch14-336
+      batch_size: 8
+      prompt_key: prompt

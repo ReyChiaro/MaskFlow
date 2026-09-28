@@ -1,10 +1,12 @@
-import torch
 import dataclasses
-
+from functools import partial
 from pathlib import Path
-from typing import Literal
-from omegaconf import OmegaConf
+
+import torch
 from loguru import logger
+from omegaconf import OmegaConf
+
+from pipelines.cfg import training_probabilities
 from trainer.base_trainer import BaseTrainer
 from trainer.lora_utils import add_trainable_lora, save_lora_adapter
 from trainer.parallel.utils import wait_for_everyone
@@ -13,16 +15,14 @@ from trainer.prompt_sampler.prompt_sampler import PromptSampler
 
 @dataclasses.dataclass
 class LoraTrainer(BaseTrainer):
-
     lora_configs: OmegaConf | None = None
     adapter_state_dict_dir: str = "lora_adapter"
 
-    def _init_trainable(self):
-        add_trainable_lora(
+    def _init_trainable(self) -> None:
+        """Insert meta adapters and replay their initialization on rank 0 CPU at load time."""
+        self.pipe.configure_model(
             self.pipe.transformer,
-            self.lora_configs,
-            self.device,
-            self._train_dtype,
+            partial(add_trainable_lora, cfgs=self.lora_configs, dtype=self._train_dtype),
         )
 
     def save_lora_adapter_checkpoint(self, checkpoint_dir: Path):
@@ -54,21 +54,19 @@ class LoraTrainer(BaseTrainer):
 
 @dataclasses.dataclass
 class MaskFlowTrainer(LoraTrainer):
-
     prompt_sampler_cfgs: OmegaConf = None
 
-    # Mirrored from pipeline.cfg_type by the trainer config interpolation.
-    cfg_type: Literal["progressive", "condition_weighted"] = "condition_weighted"
-
+    # CFG
     mask_cfg_dropout: float = 0.0
+    cfg_branch_probabilities: dict[str, float] | None = None
     mask_cfg_scale: float = 1.0
+    interaction_cfg_scale: float | None = None
 
     def __post_init__(self):
+        self.cfg_branch_probabilities = training_probabilities(
+            self.cfg_branch_probabilities, self.text_cfg_dropout, self.mask_cfg_dropout
+        )
         super().__post_init__()
-        if self.cfg_type not in {"progressive", "condition_weighted"}:
-            raise ValueError(f"Unsupported cfg_type: {self.cfg_type}.")
-        if self.text_cfg_dropout + self.mask_cfg_dropout > 1.0:
-            raise ValueError("text_cfg_dropout + mask_cfg_dropout must be <= 1 for mutually exclusive CFG dropout.")
         self.prompt_sampler = PromptSampler(**self.prompt_sampler_cfgs)
 
     def preprocess_train_batch(self, batch, step: int):
@@ -77,34 +75,24 @@ class MaskFlowTrainer(LoraTrainer):
             tuple(zip(batch["edit_instruction"], batch["prompt"])),
             step,
         )
+        batch["prompt"] = runtime_prompt
 
-        # Handle the CFG dropout
-        # Text dropout always drops only the prompt. Mask dropout drops the
-        # VLM/DiT mask and additionally drops the prompt for progressive CFG.
-        #
-        # The CFG includes two types
-        # Type I: `progressive`
-        #   v(M,P) <- v(null,null) + s_M (v(M,null) - v(null,null)) + s_T (v(M,P) - v(M,null))
-        # Type II: `condition_weighted`
-        #   v_T <- v(M,P) + (s_T - 1) (v(M,P) - v(M,null))
-        #   v_M <- v(M,P) + (s_M - 1) (v(M,P) - v(null,P))
-        #   v(M,P) <- 0.5 * (rescale(v_T) + rescale(v_M))
-        dropout_sample = self.rng.random()
-        if dropout_sample < self.text_cfg_dropout:
-            batch["prompt"] = ["" for _ in runtime_prompt]
-            batch["mask_cfg_dropped"] = False
-        elif dropout_sample < self.text_cfg_dropout + self.mask_cfg_dropout:
-            if self.cfg_type == "progressive":
-                batch["prompt"] = ["" for _ in runtime_prompt]
-            else:
-                batch["prompt"] = runtime_prompt
-            batch["mask_cfg_dropped"] = True
-        else:
-            batch["prompt"] = runtime_prompt
-            batch["mask_cfg_dropped"] = False
+        # A batch shares one condition layout. Keep the original mask and prompt;
+        # the pipeline applies this selection only to model-visible conditions.
+        draw = self.rng.random() * sum(self.cfg_branch_probabilities.values())
+        cumulative = 0.0
+        for branch, probability in self.cfg_branch_probabilities.items():
+            cumulative += probability
+            if draw < cumulative:
+                break
+        batch["cfg_branch"] = branch
         return batch
 
     def preprocess_eval_batch(self, batch, step: int):
+        r"""
+        `prompt`: Image editing prompt that *without* position cues.
+        `edit_instruction`: Image editing prompt that *with* position cues.
+        """
         return batch
 
     @torch.inference_mode()
@@ -128,13 +116,13 @@ class MaskFlowTrainer(LoraTrainer):
         with open(rank_metadata_path, "w", encoding="utf-8") as metadata_file:
             for step, batch in enumerate(self.eval_loader):
                 batch = self.preprocess_eval_batch(batch, global_step)
-
-                # The pipeline must support text CFG and mask CFG
                 output: dict[str, torch.Tensor] = self.pipe.eval_step(
                     batch=batch,
                     num_inference_steps=self.num_inference_steps,
                     text_cfg_scale=self.text_cfg_scale,
                     mask_cfg_scale=self.mask_cfg_scale,
+                    interaction_cfg_scale=self.interaction_cfg_scale,
+                    seed=self.eval_seed,
                 )
                 self._save_eval_batch(batch, output, save_dir, step, metadata_file)
 

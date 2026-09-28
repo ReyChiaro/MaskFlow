@@ -1,27 +1,27 @@
-_target_: pipelines.qwenimage.qwenimage_mask_flow.QwenImageMaskFlow
+_target_: pipelines.qwenimage.qwenimage_maskflow.QwenImageMaskFlow
 _recursive_: true
 
 pretrained_model: Qwen/Qwen-Image-Edit-2511
+max_condition_resolution: 147456
+divisible_by: 32
 
 mask_dilation_kernel: 25
 mask_blur_kernel: 25
 mask_blur_sigma: 25.0
-mask_edge_width: 50
+# mask_edge_width: 50
 
 mask_loss_weight: 1.0
-edge_loss_weight: 0.0
+# edge_loss_weight: 0.0
 
-enable_vae_mask_encoding: true
+# enable_vae_mask_encoding: true
 
-cfg_type: condition_weighted  # progressive | condition_weighted
-mask_cfg_null_type: "null"    # full_one | null, NOTE: use "" to include null, otherwise parse to `None`
-enable_mask_cfg_gating: false
+rescale_cfg: true
 
 enable_masked_loss: true
 
-enable_local_denoise_train: false
-enable_local_denoise_infer: false
-local_denoise_steps: [0.0, 1.0]
+# enable_local_denoise_train: false
+# enable_local_denoise_infer: false
+# local_denoise_steps: [0.0, 1.0]
 
 enable_pixel_blend: true
 
@@ -32,6 +32,13 @@ poisson_lambda_e: 1
 poisson_lambda_s: 1
 poisson_num_iter: 50
 poisson_momentum: 0.1
+
+# Optional complete Poisson OFF/ON trajectories with identical initial noise.
+# Null disables comparison. Enabled: twice the denoising forwards + two final decodes.
+velocity_visualization_dir: null
+velocity_visualization_steps: null  # 1-based snapshots; both trajectories always evolve through every step.
+velocity_visualization_max_samples: 1  # Export cap per batch/rank; both full batches are inferred.
+velocity_visualization_grid: 24  # Maximum arrows along the longest image dimension.
 
 fsdp_configs:
   transformer.transformer_blocks:
@@ -51,7 +58,7 @@ fsdp_configs:
     iterable: false
     reshard_after_forward: false
 
-  text_pipeline.text_encoder.model:
+  text_pipeline.text_encoder:
     iterable: false
     reshard_after_forward: false
 
@@ -72,3 +79,4 @@ scheduler:
   time_shift_type: exponential
   use_dynamic_shifting: true
   unmask_with: noisy_source
+  background_noise_power: 1.0  # >= 1; higher values reveal the source background earlier.

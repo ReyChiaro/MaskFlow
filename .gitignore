@@ -21,16 +21,22 @@ outputs/
 .DS_Store
 
 # Others
-dataset/
+dataset/*
 demo/
 evaluations/
 experiments/
 figs/
-scripts/
+script/
 viewer/
 checkpoints/
-.env
+evaluator/docs/
+tests/
+assets/test/
+tools/
+results/
 
+.env
+launch_*.sh
 *.log
 *.typ
 *.tar
